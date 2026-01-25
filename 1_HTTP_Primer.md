@@ -4,6 +4,32 @@ A backend-oriented guide to the 90% of HTTP you use daily. Each section keeps th
 
 ---
 
+## Table of Contents
+
+- [Introduction: Why Focus on HTTP?](#introduction-why-focus-on-http)
+- [1) Big Picture: Client-Server Model](#1-big-picture-client-server-model)
+- [2) Statelessness: The Heart of HTTP](#2-statelessness-the-heart-of-http)
+- [3) HTTP Versions: Evolution of Performance](#3-http-versions-evolution-of-performance)
+- [4) Message Format](#4-message-format)
+- [5) Headers: What and Why](#5-headers-what-and-why)
+- [6) Methods and Intent](#6-methods-and-intent)
+- [7) CORS: Cross-Origin Resource Sharing](#7-cors-cross-origin-resource-sharing)
+- [8) HTTP Status Codes: Communicating Results](#8-http-status-codes-communicating-results)
+- [9) HTTP Caching: Reusing Responses Efficiently](#9-http-caching-reusing-responses-efficiently)
+- [10) Content Negotiation: Agreeing on Format](#10-content-negotiation-agreeing-on-format)
+- [11) HTTP Compression: Saving Bandwidth](#11-http-compression-saving-bandwidth)
+- [12) Persistent Connections and Keep-Alive](#12-persistent-connections-and-keep-alive)
+- [13) Large Requests: Multipart Uploads](#13-large-requests-multipart-uploads)
+- [14) Large Responses: Streaming and Chunked Transfer](#14-large-responses-streaming-and-chunked-transfer)
+- [15) HTTPS, TLS, and Security](#15-https-tls-and-security)
+- [16) Quick Reference Examples](#16-quick-reference-examples)
+- [17) Mental Model Checklist](#17-mental-model-checklist)
+- [18) Real-World Patterns](#18-real-world-patterns)
+- [19) What to Explore Next (The Rabbit Hole)](#19-what-to-explore-next-the-rabbit-hole)
+- [Conclusion](#conclusion)
+
+---
+
 ## Introduction: Why Focus on HTTP?
 
 Backend is **huge**. If we start discussing every single component, we'd be stuck for years. So we'll focus on topics used in **90% of codebases**—the essential building blocks every backend engineer encounters daily.
@@ -30,6 +56,8 @@ Throughout our discussion, HTTP and HTTPS are largely interchangeable. HTTPS is 
 - **Data integrity** to prevent tampering
 
 The underlying HTTP principles remain the same.
+
+---
 
 ## 2) Statelessness: The Heart of HTTP
 
@@ -2320,24 +2348,251 @@ Browser shows lock icon
 - Valid from/to dates
 - Encryption details (e.g., "TLS 1.3, AES_128_GCM")
 
-### TLS Certificates
+### TLS Certificates: Deep Dive
 
-**What's in a certificate:**
-- **Domain name:** `example.com`
-- **Organization:** "Example Inc."
-- **Public key:** Used for encryption
-- **Issuer:** Certificate Authority (CA) that verified identity
-- **Validity period:** Not before / Not after dates
-- **Signature:** CA's cryptographic signature
+#### 🧠 First: The Problem TLS Certificates Solve
 
-**Certificate Authorities (CAs):**
-- Trusted third parties that issue certificates
-- Examples: Let's Encrypt (free), DigiCert, GlobalSign
-- Browsers have built-in list of trusted CAs
+When you open:
 
-**Getting a certificate:**
+```
+https://google.com
+```
+
+How do you know:
+
+> ❓ This is REALLY Google and not a hacker pretending to be Google?
+
+And:
+
+> ❓ How do we make sure nobody can read or change the data in between?
+
+So we need:
+
+* 🔒 **Encryption** (privacy)
+* ✅ **Identity verification** (server is real)
+* 🛡️ **Integrity** (data not modified)
+
+---
+
+#### 🧾 What is a TLS Certificate?
+
+A TLS certificate contains:
+
+* 🌐 Domain name (example.com)
+* 🏢 Owner info (Google, Amazon, etc.)
+* 🔓 Server's **public key**
+* ✍️ Signature of a **Certificate Authority (CA)**
+
+---
+
+#### 🏛️ What is a Certificate Authority (CA)?
+
+CA is a **trusted organization** like:
+
+* DigiCert
+* Let's Encrypt
+* GlobalSign
+* Cloudflare
+
+They:
+
+> ✅ Verify that you really own `example.com`
+> ✅ Then sign your certificate
+
+Browsers **trust these CAs** by default.
+
+---
+
+#### 🧱 Simple analogy
+
+TLS certificate = **Aadhaar / Passport** of a website.
+
+CA = **Government**
+
+Browser = **Police officer**
+
+Website says:
+
+> "I am google.com"
+
+Browser says:
+
+> "Show your ID"
+
+Website shows certificate.
+
+Browser checks:
+
+> "Is this signed by a trusted CA?"
+
+If yes:
+
+> ✅ Trust
+
+---
+
+#### 🔁 Complete TLS Handshake (Step-by-Step)
+
+You open:
+
+```
+https://example.com
+```
+
+**Step 1️⃣ Client → Server: "Hello"**
+
+Browser says:
+
+> "I want to connect securely."
+
+**Step 2️⃣ Server → Client: Sends Certificate**
+
+Server sends:
+
+* Its TLS certificate
+* Which contains:
+  * Server public key
+  * Domain name
+  * CA signature
+
+**Step 3️⃣ Browser Verifies Certificate**
+
+Browser checks:
+
+* Is CA trusted?
+* Is signature valid?
+* Is domain name correct?
+* Is certificate expired?
+
+If any fail:
+
+> 🚨 Browser shows: "Not Secure"
+
+**Step 4️⃣ Browser Generates a Secret Key (Session Key)**
+
+Because:
+
+> Public key crypto is slow
+
+So browser creates:
+
+```
+Random symmetric session key
+```
+
+**Step 5️⃣ Browser Encrypts Session Key using Server's Public Key**
+
+```
+Encrypt(session_key, server_public_key)
+```
+
+Sends to server.
+
+**Step 6️⃣ Server Decrypts using Private Key**
+
+```
+session_key = Decrypt(..., server_private_key)
+```
+
+Now:
+
+> ✅ Both sides have same secret key
+
+**Step 7️⃣ Secure Encrypted Communication Starts**
+
+All further data:
+
+```
+AES(session_key)
+```
+
+Fast + secure.
+
+---
+
+#### 🧠 Important: What exactly did the certificate do?
+
+Certificate:
+
+> ✅ Proved server identity
+> ✅ Gave server's public key safely
+> ✅ Prevented MITM attack
+
+---
+
+#### 🔥 Where TLS Certificates Are Used?
+
+Everywhere:
+
+* 🌐 HTTPS websites
+* 🔐 Login pages
+* 💳 Payments
+* ☁️ Cloud APIs
+* 🐙 GitHub
+* 📧 Email servers
+* 🔁 Microservices (internal TLS)
+* 📱 Mobile apps → backend
+
+---
+
+#### 🧩 What happens WITHOUT TLS?
+
+Anyone in the middle can:
+
+* 👀 Read passwords
+* ✏️ Modify responses
+* 🧪 Inject malware
+
+---
+
+#### 🧱 Types of Certificates
+
+| Type | What it verifies                           |
+| ---- | ------------------------------------------ |
+| DV   | Only domain ownership                      |
+| OV   | Organization verified                      |
+| EV   | Company legal identity (green bar earlier) |
+
+---
+
+#### 🏁 One-line interview answer
+
+> **A TLS certificate is a digitally signed identity document that binds a domain name to a public key and is used in HTTPS to verify the server's identity and establish an encrypted connection.**
+
+---
+
+#### 🧠 Ultra-simple memory version
+
+> Certificate = Website ID
+> TLS = Secure tunnel
+
+---
+
+#### 🔥 Super important conclusion
+
+> 🔐 Encryption without identity verification is useless.
+
+TLS gives **both**.
+
+---
+
+#### 🧩 TLS Handshake Flow Diagram
+
+```
+Browser ── hello ──> Server
+Browser <─ cert ─── Server
+Browser verifies CA
+Browser sends encrypted session key
+Server decrypts
+== Secure tunnel established ==
+```
+
+---
+
+#### Getting a Certificate (Practical)
+
+**Using Let's Encrypt (free):**
 ```bash
-# Example: Let's Encrypt (free)
 sudo certbot --nginx -d example.com
 ```
 
