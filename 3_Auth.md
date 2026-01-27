@@ -605,6 +605,51 @@ If valid: decoded = {sub: "123", role: "admin"}
   ↓
 Process request (NO database lookup!)
 ```
++-----------+        1) Login         +-------------+
+|           | ---------------------> |             |
+|  Browser  |   (username,password) |   Server    |
+|           |                        | (Auth API)  |
++-----------+                        +-------------+
+                                         |
+                                         | 2) Verify credentials
+                                         v
+                                   +-------------+
+                                   |   Database  |
+                                   +-------------+
+                                         |
+                                         | OK
+                                         v
++-----------+        3) JWT Token        +-------------+
+|           | <---------------------  |             |
+|  Browser  |     (Signed Token)      |   Server    |
+|           |                        |             |
++-----------+                        +-------------+
+
+
+=======================================================
+
+
++-----------+   4) API Request + JWT   +-------------+
+|           | ---------------------->  |             |
+|  Browser  |  Authorization: Bearer  |   Server    |
+|           |       <JWT>             |             |
++-----------+                        +-------------+
+                                         |
+                                         | 5) Verify JWT Signature
+                                         | 6) Check Expiry
+                                         v
+                                   +-------------+
+                                   |   Request   |
+                                   |   Accepted  |
+                                   +-------------+
+                                         |
+                                         v
+                                   +-------------+
+                                   |  Response   |
+                                   +-------------+
+                                         |
+                                         v
+                                    Browser
 
 #### Advantages
 
