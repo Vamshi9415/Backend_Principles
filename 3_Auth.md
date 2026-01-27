@@ -605,6 +605,7 @@ If valid: decoded = {sub: "123", role: "admin"}
   ↓
 Process request (NO database lookup!)
 ```
+```
 +-----------+        1) Login         +-------------+
 |           | ---------------------> |             |
 |  Browser  |   (username,password) |   Server    |
@@ -650,6 +651,7 @@ Process request (NO database lookup!)
                                          |
                                          v
                                     Browser
+                                    ```
 
 #### Advantages
 
