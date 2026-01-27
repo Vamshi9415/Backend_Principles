@@ -605,53 +605,70 @@ If valid: decoded = {sub: "123", role: "admin"}
   ↓
 Process request (NO database lookup!)
 ```
+
+## JWT Authentication Flow Diagram
+
+```mermaid
+sequenceDiagram
+    participant Browser
+    participant Server
+    participant Database
+
+    Note over Browser,Database: Login Flow
+    Browser->>Server: 1) POST /login<br/>(username, password)
+    Server->>Database: 2) Verify credentials
+    Database-->>Server: User validated ✓
+    Server->>Server: 3) Generate JWT<br/>(sign with secret)
+    Server-->>Browser: JWT Token<br/>(Signed Token)
+    
+    Note over Browser,Database: Authenticated Request Flow
+    Browser->>Server: 4) API Request<br/>Authorization: Bearer <JWT>
+    Server->>Server: 5) Verify JWT Signature<br/>(using secret key)
+    Server->>Server: 6) Check Token Expiry<br/>(exp claim)
+    alt Token Valid
+        Server->>Server: Process Request
+        Server-->>Browser: Response with Data
+    else Token Invalid/Expired
+        Server-->>Browser: 401 Unauthorized
+    end
 ```
-+-----------+        1) Login         +-------------+
-|           | ---------------------> |             |
-|  Browser  |   (username,password) |   Server    |
-|           |                        | (Auth API)  |
-+-----------+                        +-------------+
-                                         |
-                                         | 2) Verify credentials
-                                         v
-                                   +-------------+
-                                   |   Database  |
-                                   +-------------+
-                                         |
-                                         | OK
-                                         v
-+-----------+        3) JWT Token        +-------------+
-|           | <---------------------  |             |
-|  Browser  |     (Signed Token)      |   Server    |
-|           |                        |             |
-+-----------+                        +-------------+
+
+### Step-by-Step Breakdown
+
+**Login Phase:**
+1. **Browser → Server**: User submits credentials
+2. **Server → Database**: Validates username/password
+3. **Server**: Creates signed JWT with user claims
+4. **Server → Browser**: Returns JWT token
+
+**Authenticated Request Phase:**
+1. **Browser → Server**: Sends request with JWT in Authorization header
+2. **Server**: Verifies JWT signature using secret key
+3. **Server**: Checks if token is expired
+4. **Server → Browser**: Returns protected data if valid, 401 if invalid
+
+### Alternative: Simple Flow Diagram
+
+```mermaid
+graph TD
+    A[User Login] --> B[Server Validates Credentials]
+    B --> C{Valid?}
+    C -->|Yes| D[Generate JWT]
+    C -->|No| E[401 Unauthorized]
+    D --> F[Return JWT to Client]
+    F --> G[Client Stores JWT]
+    
+    G --> H[Client Makes API Request]
+    H --> I[Attach JWT in Header]
+    I --> J[Server Verifies Signature]
+    J --> K{Valid & Not Expired?}
+    K -->|Yes| L[Process Request]
+    K -->|No| M[401 Unauthorized]
+    L --> N[Return Response]
+```
 
 
-=======================================================
-
-
-+-----------+   4) API Request + JWT   +-------------+
-|           | ---------------------->  |             |
-|  Browser  |  Authorization: Bearer  |   Server    |
-|           |       <JWT>             |             |
-+-----------+                        +-------------+
-                                         |
-                                         | 5) Verify JWT Signature
-                                         | 6) Check Expiry
-                                         v
-                                   +-------------+
-                                   |   Request   |
-                                   |   Accepted  |
-                                   +-------------+
-                                         |
-                                         v
-                                   +-------------+
-                                   |  Response   |
-                                   +-------------+
-                                         |
-                                         v
-                                    Browser
-                                    ```
+                                    
 
 #### Advantages
 
