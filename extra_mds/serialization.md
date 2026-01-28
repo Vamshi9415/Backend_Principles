@@ -4,7 +4,6 @@
 
 #  Table of Contents
 
-0.  **How to Use This Guide (Learning Path)**
 
 1.  **Introduction: The Communication Problem**
 2.  **The Core Concept: What is Serialization?**
