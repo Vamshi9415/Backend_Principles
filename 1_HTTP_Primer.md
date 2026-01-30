@@ -73,14 +73,24 @@ Since the server doesn't remember past requests, **each request must include ALL
 ### Real-World Example: User Profile Access
 When accessing a user profile, the client must provide credentials (cookies or tokens) on **every single request**. The server doesn't remember "Oh, this user logged in 5 minutes ago." Each request must prove identity.
 
-```http
-GET /api/user/profile HTTP/1.1
-Host: api.example.com
-Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
-Cookie: sessionId=abc123xyz
-```
+```python
+from fastapi import FastAPI, Depends, Header
+from fastapi.security import HTTPBearer
 
-Every time you request `/api/user/profile`, you must send the auth token again.
+app = FastAPI()
+security = HTTPBearer()
+
+@app.get("/api/user/profile")
+async def get_user_profile(credentials = Depends(security)):
+    # Every request must include the authorization token
+    # Server doesn't remember previous requests
+    return {"id": 42, "name": "User", "email": "user@example.com"}
+
+# Client calls:
+# GET /api/user/profile with Authorization header
+# GET /api/user/profile with Authorization header (again)
+# Each time, the auth token must be sent
+```
 
 ### Benefits of Stateless Design
 
@@ -106,13 +116,18 @@ Because HTTP is stateless, developers implement state management techniques when
 - **Shopping carts** maintained via session storage
 
 **Example:** E-commerce shopping cart
-```http
-GET /api/cart HTTP/1.1
-Host: shop.example.com
-Cookie: cartId=xyz789; userId=12345
-```
+```python
+from fastapi import FastAPI, Cookie
+from typing import Optional
 
-The cookie maintains state across requests even though HTTP itself is stateless.
+app = FastAPI()
+
+@app.get("/api/cart")
+async def get_cart(cartId: Optional[str] = Cookie(None), userId: Optional[str] = Cookie(None)):
+    # Cookies maintain state across requests
+    # Each request includes cart information even though HTTP is stateless
+    return {"cartId": cartId, "userId": userId, "items": []}
+```
 
 ## 3) HTTP Versions: Evolution of Performance
 
@@ -159,18 +174,20 @@ This gives clear **semantic meaning** to each type of action—making HTTP intui
 #### **GET** - Retrieve Data
 Fetch data from the server. Should **NOT modify** anything on the server.
 
-```http
-GET /api/users/42 HTTP/1.1
-Host: api.example.com
-```
+```python
+from fastapi import FastAPI
 
-**Response:**
-```json
-{
-  "id": 42,
-  "name": "John Doe",
-  "email": "john@example.com"
-}
+app = FastAPI()
+
+@app.get("/api/users/{user_id}")
+async def get_user(user_id: int):
+    return {
+        "id": user_id,
+        "name": "John Doe",
+        "email": "john@example.com"
+    }
+
+# Client: GET /api/users/42
 ```
 
 **Characteristics:**
@@ -181,25 +198,27 @@ Host: api.example.com
 #### **POST** - Create Data
 Create new resources on the server. **Requires a body** to send data.
 
-```http
-POST /api/users HTTP/1.1
-Host: api.example.com
-Content-Type: application/json
+```python
+from fastapi import FastAPI
+from pydantic import BaseModel
+from datetime import datetime
 
-{
-  "name": "Jane Smith",
-  "email": "jane@example.com"
-}
-```
+app = FastAPI()
 
-**Response (201 Created):**
-```json
-{
-  "id": 43,
-  "name": "Jane Smith",
-  "email": "jane@example.com",
-  "created": "2025-01-21T10:30:00Z"
-}
+class User(BaseModel):
+    name: str
+    email: str
+
+@app.post("/api/users", status_code=201)
+async def create_user(user: User):
+    return {
+        "id": 43,
+        "name": user.name,
+        "email": user.email,
+        "created": datetime.now().isoformat()
+    }
+
+# Client: POST /api/users with {"name": "Jane Smith", "email": "jane@example.com"}
 ```
 
 **Characteristics:**
@@ -210,34 +229,46 @@ Content-Type: application/json
 #### **PATCH** - Partial Update
 Update **specific fields** of a resource. Used for profile updates, toggling settings, etc.
 
-```http
-PATCH /api/users/42 HTTP/1.1
-Host: api.example.com
-Content-Type: application/json
+```python
+from fastapi import FastAPI
+from pydantic import BaseModel
+from typing import Optional
 
-{
-  "name": "John Updated"
-}
+app = FastAPI()
+
+class UserUpdate(BaseModel):
+    name: Optional[str] = None
+    email: Optional[str] = None
+
+@app.patch("/api/users/{user_id}")
+async def update_user(user_id: int, user_update: UserUpdate):
+    # Only provided fields are updated
+    return {"id": user_id, "name": user_update.name, "email": "unchanged"}
+
+# Client: PATCH /api/users/42 with {"name": "John Updated"}
 ```
-
-Only the `name` field is updated; other fields remain unchanged.
 
 #### **PUT** - Complete Replacement
 Replace the **entire resource** with new data.
 
-```http
-PUT /api/users/42 HTTP/1.1
-Host: api.example.com
-Content-Type: application/json
+```python
+from fastapi import FastAPI
+from pydantic import BaseModel
 
-{
-  "name": "John Doe",
-  "email": "newemail@example.com",
-  "phone": "+1234567890"
-}
+app = FastAPI()
+
+class User(BaseModel):
+    name: str
+    email: str
+    phone: str
+
+@app.put("/api/users/{user_id}")
+async def replace_user(user_id: int, user: User):
+    # Entire resource is replaced
+    return {"id": user_id, **user.dict()}
+
+# Client: PUT /api/users/42 with complete user object
 ```
-
-The entire user object is replaced. Any fields not included are removed/reset.
 
 **PATCH vs PUT:**
 - **PATCH:** Append/modify specific fields (partial update)
@@ -248,30 +279,39 @@ The entire user object is replaced. Any fields not included are removed/reset.
 #### **DELETE** - Remove Resource
 Delete a resource from the server.
 
-```http
-DELETE /api/users/42 HTTP/1.1
-Host: api.example.com
-```
+```python
+from fastapi import FastAPI
 
-**Response (204 No Content):**
-```http
-HTTP/1.1 204 No Content
-```
+app = FastAPI()
 
-No body needed in response—the deletion is the action.
+@app.delete("/api/users/{user_id}", status_code=204)
+async def delete_user(user_id: int):
+    # No response body needed
+    return None
+
+# Client: DELETE /api/users/42
+# Response: 204 No Content
+```
 
 #### **OPTIONS** - Discover Capabilities
 Used primarily for **CORS preflight requests** to discover server capabilities.
 
-```http
-OPTIONS /api/payments HTTP/1.1
-Host: api.example.com
-Origin: https://app.example.com
-Access-Control-Request-Method: PUT
-Access-Control-Request-Headers: Authorization, Content-Type
-```
+```python
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
-Server responds with allowed methods and headers (detailed in CORS section).
+app = FastAPI()
+
+# FastAPI handles OPTIONS automatically with CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://app.example.com"],
+    allow_methods=["GET", "POST", "PUT", "DELETE"],
+    allow_headers=["Authorization", "Content-Type"],
+)
+
+# OPTIONS requests are handled automatically
+```
 
 ### Idempotent vs Non-Idempotent
 
@@ -279,39 +319,40 @@ Server responds with allowed methods and headers (detailed in CORS section).
 Can be called **multiple times** with the **same result**:
 
 **GET** - Idempotent
-```http
-GET /api/users/42    → Returns user data
-GET /api/users/42    → Returns same data
-GET /api/users/42    → Returns same data
+```python
+@app.get("/api/users/{user_id}")
+async def get_user(user_id: int):
+    # Called multiple times, returns same data
+    return {"id": user_id, "name": "John"}
 ```
-No matter how many times you fetch, the data remains the same.
 
 **PUT** - Idempotent
-```http
-PUT /api/users/42 {"name": "New Name"}    → Replaces user
-PUT /api/users/42 {"name": "New Name"}    → Same replacement
-PUT /api/users/42 {"name": "New Name"}    → Same result
+```python
+@app.put("/api/users/{user_id}")
+async def update_user(user_id: int, user: User):
+    # Replace multiple times with same data = same result
+    return {"id": user_id, **user.dict()}
 ```
-Replacing with the same data multiple times yields the same final state.
 
 **DELETE** - Idempotent
-```http
-DELETE /api/users/42    → Deletes user
-DELETE /api/users/42    → Already deleted (same state)
-DELETE /api/users/42    → Still deleted (same state)
+```python
+@app.delete("/api/users/{user_id}", status_code=204)
+async def delete_user(user_id: int):
+    # Delete once or multiple times = same state (deleted)
+    return None
 ```
-You can only delete once; subsequent attempts don't change the state.
 
 #### **Non-Idempotent Methods**
 
 **POST** - Non-idempotent
-```http
-POST /api/notes {"text": "Meeting notes"}    → Creates note ID 1
-POST /api/notes {"text": "Meeting notes"}    → Creates note ID 2
-POST /api/notes {"text": "Meeting notes"}    → Creates note ID 3
+```python
+@app.post("/api/notes")
+async def create_note(note: Note):
+    # Each call creates new resource with different ID
+    # POST {"text": "Meeting notes"} → ID 1
+    # POST {"text": "Meeting notes"} → ID 2 (different!)
+    return {"id": 1, "text": note.text}
 ```
-
-Each POST creates a **new resource**, producing different results.
 
 ### Summary Table
 
@@ -328,14 +369,21 @@ Each POST creates a **new resource**, producing different results.
 #### 1. Request Headers
 Sent by **client to server** to provide information about the request:
 
-```http
-GET /api/products HTTP/1.1
-Host: api.example.com
-User-Agent: Mozilla/5.0 (iPhone; CPU iPhone OS 14_0)
-Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
-Accept: application/json
-Accept-Language: en-US,es;q=0.8
-Accept-Encoding: gzip, br
+```python
+from fastapi import FastAPI, Header
+from typing import Optional
+
+app = FastAPI()
+
+@app.get("/api/products")
+async def get_products(
+    user_agent: Optional[str] = Header(None),
+    authorization: Optional[str] = Header(None),
+    accept: Optional[str] = Header(None),
+    accept_language: Optional[str] = Header(None)
+):
+    # Headers provide metadata about the request
+    return {"products": []}
 ```
 
 - **`User-Agent`:** Identifies client type (browser, mobile app, Postman, etc.)
@@ -349,10 +397,22 @@ Request headers help servers understand the **client's environment, preferences,
 #### 2. General Headers
 Used in **both requests and responses** for metadata about the message:
 
-```http
-Date: Tue, 21 Jan 2025 10:30:00 GMT
-Cache-Control: no-cache, max-age=3600
-Connection: keep-alive
+```python
+from fastapi import FastAPI
+from fastapi.responses import JSONResponse
+from datetime import datetime
+
+app = FastAPI()
+
+@app.get("/api/data")
+async def get_data():
+    return JSONResponse(
+        content={"data": "example"},
+        headers={
+            "Cache-Control": "no-cache, max-age=3600",
+            "Connection": "keep-alive"
+        }
+    )
 ```
 
 - **`Date`:** Timestamp of message generation
@@ -362,11 +422,23 @@ Connection: keep-alive
 #### 3. Representation Headers
 Deal with the **representation of the resource** being transmitted:
 
-```http
-Content-Type: application/json
-Content-Length: 1024
-Content-Encoding: gzip
-ETag: "abc123xyz"
+```python
+from fastapi import FastAPI
+from fastapi.responses import JSONResponse
+import gzip
+
+app = FastAPI()
+
+@app.get("/api/resource")
+async def get_resource():
+    return JSONResponse(
+        content={"data": "example"},
+        headers={
+            "Content-Type": "application/json",
+            "Content-Encoding": "gzip",
+            "ETag": '"abc123xyz"'
+        }
+    )
 ```
 
 - **`Content-Type`:** Media type (application/json, text/html, image/png)
@@ -379,12 +451,23 @@ Representation headers ensure clients and servers know how to **interpret and pr
 #### 4. Security Headers
 Enhance security by **controlling browser behavior**:
 
-```http
-Strict-Transport-Security: max-age=31536000; includeSubDomains
-Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'
-X-Frame-Options: DENY
-X-Content-Type-Options: nosniff
-Set-Cookie: sessionId=abc123; HttpOnly; Secure; SameSite=Strict
+```python
+from fastapi import FastAPI
+from fastapi.responses import JSONResponse
+
+app = FastAPI()
+
+@app.get("/api/secure")
+async def secure_endpoint():
+    return JSONResponse(
+        content={"secure": True},
+        headers={
+            "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
+            "Content-Security-Policy": "default-src 'self'; script-src 'self'",
+            "X-Frame-Options": "DENY",
+            "X-Content-Type-Options": "nosniff"
+        }
+    )
 ```
 
 - **`Strict-Transport-Security` (HSTS):** Forces HTTPS, prevents protocol downgrade attacks
@@ -403,49 +486,52 @@ Security headers protect against various attacks by **controlling how browsers b
 #### 1. **Extensibility**
 HTTP is highly extensible because headers can be easily **added or customized** without altering the protocol:
 
-**Security enhancements:**
-```http
-Strict-Transport-Security: max-age=31536000
-```
+```python
+from fastapi import FastAPI, Header
+from fastapi.responses import JSONResponse
+from typing import Optional
+import uuid
 
-**Custom headers for specific needs:**
-```http
-X-Request-ID: 550e8400-e29b-41d4-a716-446655440000
-X-API-Version: 2.0
-X-RateLimit-Remaining: 45
-```
+app = FastAPI()
 
-**Content negotiation:**
-```http
-Accept: application/json
-Accept-Language: en-US
-Accept-Encoding: gzip
+@app.get("/api/endpoint")
+async def endpoint(
+    x_request_id: Optional[str] = Header(default_factory=lambda: str(uuid.uuid4())),
+    x_api_version: Optional[str] = Header("1.0")
+):
+    return JSONResponse(
+        content={"message": "success"},
+        headers={
+            "X-Request-ID": x_request_id,
+            "X-RateLimit-Remaining": "45"
+        }
+    )
 ```
-
-Just add metadata, and the entire interaction flow changes!
 
 #### 2. **Remote Control**
 Headers act as a **remote control for the server**. They allow clients to send instructions or preferences that influence how the server responds:
 
-**Content negotiation:**
-```http
-Accept: application/json    → Server sends JSON
-Accept: application/xml     → Server sends XML
-Accept: text/html          → Server sends HTML
-```
+```python
+from fastapi import FastAPI, Header
+from fastapi.responses import JSONResponse, Response
+from typing import Optional
 
-**Caching control:**
-```http
-Cache-Control: max-age=3600     → Client caches for 1 hour
-Expires: Wed, 21 Jan 2026 10:30:00 GMT
-```
+app = FastAPI()
 
-**Authentication:**
-```http
-Authorization: Bearer token123  → Server grants/denies access
+@app.get("/api/resource")
+async def get_resource(
+    accept: Optional[str] = Header("application/json"),
+    authorization: Optional[str] = Header(None)
+):
+    # Content negotiation based on Accept header
+    if "xml" in accept:
+        return "<resource><data>example</data></resource>"
+    
+    return JSONResponse(
+        content={"data": "example"},
+        headers={"Cache-Control": "max-age=3600"}
+    )
 ```
-
-Headers provide powerful capabilities on top of basic request/response messaging!
    - `Host`: Domain of the server
    - `User-Agent`: Information about the client
    - `Authorization`: Authentication credentials
@@ -461,16 +547,31 @@ Headers provide powerful capabilities on top of basic request/response messaging
 
 A response message is sent **from server to client**:
 
-```http
-HTTP/1.1 200 OK
-Date: Tue, 21 Jan 2025 10:30:00 GMT
-Server: nginx/1.18.0
-Content-Type: application/json
-Content-Length: 98
-Cache-Control: max-age=3600
-Set-Cookie: sessionId=abc123; HttpOnly; Secure
+```python
+from fastapi import FastAPI
+from fastapi.responses import JSONResponse
+from datetime import datetime
+from pydantic import BaseModel
 
-{"id": 42, "name": "John Doe", "email": "john@example.com", "created": "2025-01-21T10:30:00Z"}
+app = FastAPI()
+
+class User(BaseModel):
+    id: int
+    name: str
+    email: str
+    created: str
+
+@app.get("/api/users/{user_id}")
+async def get_user(user_id: int):
+    return JSONResponse(
+        content={
+            "id": user_id,
+            "name": "John Doe",
+            "email": "john@example.com",
+            "created": datetime.now().isoformat()
+        },
+        headers={"Cache-Control": "max-age=3600"}
+    )
 ```
 
 **Breaking it down:**
@@ -606,47 +707,35 @@ A request is "simple" when ALL of these are true:
 - Frontend: `http://localhost:5173`
 - Backend: `http://localhost:3000`
 
-**Step 1: Client sends request**
-```http
-GET /api/resource HTTP/1.1
-Host: localhost:3000
-Origin: http://localhost:5173
-Accept: application/json
+**Python FastAPI Server:**
+```python
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+app = FastAPI()
+
+# Configure CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+@app.get("/api/resource")
+async def get_resource():
+    # CORS headers automatically added by middleware
+    return {"data": "success"}
 ```
 
-Browser automatically adds `Origin` header.
+**Browser makes request:**
+- Sets `Origin: http://localhost:5173` automatically
+- Receives `Access-Control-Allow-Origin: http://localhost:5173` in response
+- ✅ Response exposed to JavaScript
 
-**Step 2: Server responds**
-```http
-HTTP/1.1 200 OK
-Access-Control-Allow-Origin: http://localhost:5173
-Content-Type: application/json
-
-{"data": "success"}
-```
-
-**Step 3: Browser checks**
-- ✅ `Access-Control-Allow-Origin` header present?
-- ✅ Value matches client origin (`http://localhost:5173`) or is `*`?
-- ✅ **If yes:** Response exposed to JavaScript
-- ❌ **If no:** Response blocked, CORS error in console
-
-### When Server Blocks
-
-**If server doesn't include CORS header:**
-```http
-HTTP/1.1 200 OK
-Content-Type: application/json
-
-{"data": "success"}
-```
-
-**Browser reaction:**
-```
-❌ CORS Error: No 'Access-Control-Allow-Origin' header present
-```
-
-The response **was received** by the browser, but it **blocks JavaScript from accessing it**.
+**Without CORS configured:**
+- Server doesn't include CORS headers
+- ❌ Browser blocks response: "CORS Error"
 
 ---
 
@@ -867,62 +956,61 @@ Connection: Upgrade
 
 Most common success code. Request succeeded.
 
-**Example: GET request**
-```http
-GET /api/users/42 HTTP/1.1
-```
+```python
+from fastapi import FastAPI
 
-**Response:**
-```http
-HTTP/1.1 200 OK
-Content-Type: application/json
+app = FastAPI()
 
-{"id": 42, "name": "John Doe"}
+@app.get("/api/users/{user_id}")
+async def get_user(user_id: int):
+    # Automatically returns 200 OK with JSON
+    return {"id": user_id, "name": "John Doe"}
 ```
 
 ### **201 Created** - Resource Created
 
 Used for **POST** requests that create resources.
 
-**Example:**
-```http
-POST /api/users HTTP/1.1
-Content-Type: application/json
+```python
+from fastapi import FastAPI
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
+from datetime import datetime
 
-{"name": "Jane Smith", "email": "jane@example.com"}
+app = FastAPI()
+
+class User(BaseModel):
+    name: str
+    email: str
+
+@app.post("/api/users", status_code=201)
+async def create_user(user: User):
+    new_id = 43
+    return JSONResponse(
+        status_code=201,
+        content={
+            "id": new_id,
+            "name": user.name,
+            "created": datetime.now().isoformat()
+        },
+        headers={"Location": f"/api/users/{new_id}"}
+    )
 ```
-
-**Response:**
-```http
-HTTP/1.1 201 Created
-Location: /api/users/43
-Content-Type: application/json
-
-{"id": 43, "name": "Jane Smith", "created": "2025-01-21T10:30:00Z"}
-```
-
-Note the `Location` header pointing to the new resource.
 
 ### **204 No Content** - Success, No Response Body
 
 Request succeeded, but there's nothing to return.
 
-**Common uses:**
-- DELETE operations
-- OPTIONS preflight requests
-- Update operations that don't return updated resource
+```python
+from fastapi import FastAPI
 
-**Example: DELETE**
-```http
-DELETE /api/users/42 HTTP/1.1
+app = FastAPI()
+
+@app.delete("/api/users/{user_id}", status_code=204)
+async def delete_user(user_id: int):
+    # 204 No Content response
+    return None
 ```
-
-**Response:**
-```http
-HTTP/1.1 204 No Content
-```
-
-No body—the deletion is the result.
 
 ---
 
@@ -933,57 +1021,70 @@ No body—the deletion is the result.
 Resource **permanently** moved to new URL. Clients should use new URL for future requests.
 
 **Use case: API versioning or route changes**
-```http
-GET /api/user HTTP/1.1
+```python
+from fastapi import FastAPI
+from fastapi.responses import RedirectResponse
+
+app = FastAPI()
+
+# Old endpoint redirects to new endpoint
+@app.get("/api/user")
+async def redirect_user():
+    return RedirectResponse(
+        url="/api/person",
+        status_code=301  # Moved Permanently
+    )
+
+@app.get("/api/person")
+async def get_person():
+    return {"name": "John Doe"}
 ```
-
-**Response:**
-```http
-HTTP/1.1 301 Moved Permanently
-Location: /api/person
-```
-
-Browser automatically redirects to `/api/person` and remembers for future requests.
-
-**Example scenario:**
-- Old route: `/user` 
-- New route: `/person`
-- Add 301 redirect for backward compatibility
 
 ### **302 Found** - Temporary Redirect
 
 Resource **temporarily** at different URL. Clients should continue using original URL.
 
 **Use case: Campaign landing pages**
-```http
-GET /api/products HTTP/1.1
-```
+```python
+from fastapi import FastAPI
+from fastapi.responses import RedirectResponse
+import datetime
 
-**Response:**
-```http
-HTTP/1.1 302 Found
-Location: /api/products/campaign-2025
-```
+app = FastAPI()
 
-For a few hours/days, redirect to campaign page. Later, revert to normal behavior.
+CAMPAIGN_ACTIVE = datetime.datetime.now() < datetime.datetime(2025, 2, 1)
+
+@app.get("/api/products")
+async def get_products():
+    if CAMPAIGN_ACTIVE:
+        return RedirectResponse(
+            url="/api/products/campaign-2025",
+            status_code=302  # Temporary redirect
+        )
+    return {"products": []}
+```
 
 ### **304 Not Modified** - Use Cache
 
 Resource **hasn't changed** since last request. Client should use cached version.
 
-**Example (see Caching section for full flow):**
-```http
-GET /api/resource HTTP/1.1
-If-None-Match: "abc123"
-```
+```python
+from fastapi import FastAPI, Header
+from fastapi.responses import Response
+from typing import Optional
 
-**Response:**
-```http
-HTTP/1.1 304 Not Modified
-ETag: "abc123"
-```
+app = FastAPI()
 
-No body—client uses cached data.
+@app.get("/api/resource")
+async def get_resource(if_none_match: Optional[str] = Header(None)):
+    current_etag = '"abc123"'
+    
+    # Client has cached version
+    if if_none_match == current_etag:
+        return Response(status_code=304)  # Not Modified
+    
+    return {"data": "example"}
+```
 
 ---
 
@@ -993,40 +1094,42 @@ No body—client uses cached data.
 
 Client sent **malformed or invalid data**.
 
-**Example scenarios:**
-- Expecting number, got string
-- Expecting email, got phone number
-- Missing required field
-- Invalid JSON syntax
+```python
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel, Field
 
-**Response:**
-```http
-HTTP/1.1 400 Bad Request
-Content-Type: application/json
+app = FastAPI()
 
-{"error": "Bad Request", "message": "Missing required field: email"}
+class User(BaseModel):
+    name: str
+    email: str = Field(..., description="Email is required")
+
+@app.post("/api/users")
+async def create_user(user: User):
+    # Pydantic automatically validates and returns 400 for invalid data
+    return {"id": 1, "name": user.name}
+
+# Missing email field? FastAPI returns 400 automatically
 ```
 
 ### **401 Unauthorized** - Not Authenticated
 
-Request requires **authentication**, but:
-- No credentials provided, OR
-- Credentials are invalid/expired
+Request requires **authentication**, but no valid credentials provided.
 
-**Example:**
-```http
-GET /api/profile HTTP/1.1
+```python
+from fastapi import FastAPI, HTTPException, Depends
+from fastapi.security import HTTPBearer
+
+app = FastAPI()
+security = HTTPBearer()
+
+@app.get("/api/profile")
+async def get_profile(credentials = Depends(security)):
+    # If credentials are missing, FastAPI returns 401 automatically
+    return {"name": "User Profile"}
+
+# Without valid credentials: 401 Unauthorized response
 ```
-
-**Response:**
-```http
-HTTP/1.1 401 Unauthorized
-WWW-Authenticate: Bearer
-
-{"error": "Unauthorized", "message": "Missing or invalid token"}
-```
-
-**Client action:** Redirect to login page
 
 ### **403 Forbidden** - Not Authorized
 
@@ -1035,60 +1138,63 @@ Server understood request and authenticated user, but **user lacks permission**.
 **Example scenario:**
 - User A tries to delete User B's resource
 
-```http
-DELETE /api/users/99/posts/123 HTTP/1.1
-Authorization: Bearer user_a_token
+```python
+from fastapi import FastAPI, HTTPException, Depends
+from fastapi.security import HTTPBearer
+
+app = FastAPI()
+security = HTTPBearer()
+
+@app.delete("/api/users/{user_id}/posts/{post_id}")
+async def delete_post(
+    user_id: int,
+    post_id: int,
+    credentials = Depends(security)
+):
+    # Check permissions
+    if not has_permission(credentials, post_id):
+        raise HTTPException(
+            status_code=403,
+            detail="You do not have permission to delete this resource"
+        )
+    return None
 ```
-
-**Response:**
-```http
-HTTP/1.1 403 Forbidden
-
-{"error": "Forbidden", "message": "You do not have permission to delete this resource"}
-```
-
-**401 vs 403:**
-- **401:** "Who are you?" (not logged in)
-- **403:** "I know who you are, but you can't do this" (insufficient permissions)
 
 ### **404 Not Found** - Resource Doesn't Exist
 
-Most famous status code! Resource unavailable because:
-- URL is incorrect
-- Resource was deleted
-- Resource never existed
+Most famous status code! Resource unavailable.
 
-**Example:**
-```http
-GET /api/users/999999 HTTP/1.1
-```
+```python
+from fastapi import FastAPI, HTTPException
 
-**Response:**
-```http
-HTTP/1.1 404 Not Found
+app = FastAPI()
 
-{"error": "Not Found", "message": "User with ID 999999 not found"}
+@app.get("/api/users/{user_id}")
+async def get_user(user_id: int):
+    if not user_exists(user_id):
+        raise HTTPException(
+            status_code=404,
+            detail=f"User with ID {user_id} not found"
+        )
+    return {"id": user_id, "name": "John"}
 ```
 
 ### **405 Method Not Allowed**
 
 Invalid HTTP method for this endpoint.
 
-**Example scenario:** Endpoint only accepts GET, but client sends PUT
+```python
+from fastapi import FastAPI, HTTPException
 
-```http
-PUT /api/read-only-data HTTP/1.1
+app = FastAPI()
+
+# FastAPI automatically returns 405 for non-existent methods
+@app.get("/api/read-only-data")
+async def get_data():
+    return {"data": "read-only"}
+
+# PUT /api/read-only-data → 405 Method Not Allowed (automatic)
 ```
-
-**Response:**
-```http
-HTTP/1.1 405 Method Not Allowed
-Allow: GET, HEAD
-
-{"error": "Method Not Allowed"}
-```
-
-Often caused by typos in frontend code.
 
 ### **409 Conflict** - State Conflict
 
@@ -1096,39 +1202,45 @@ Request conflicts with current server state.
 
 **Example scenario: Duplicate folder name**
 
-```http
-POST /api/folders HTTP/1.1
-Content-Type: application/json
+```python
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
 
-{"name": "Documents"}
+app = FastAPI()
+
+class Folder(BaseModel):
+    name: str
+
+@app.post("/api/folders")
+async def create_folder(folder: Folder):
+    if folder_exists(folder.name):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Folder '{folder.name}' already exists"
+        )
+    return {"id": 1, "name": folder.name}
 ```
-
-But "Documents" folder already exists.
-
-**Response:**
-```http
-HTTP/1.1 409 Conflict
-
-{"error": "Conflict", "message": "Folder 'Documents' already exists"}
-```
-
-**Client action:** Ask user to choose different name
 
 ### **429 Too Many Requests** - Rate Limiting
 
 Client exceeded **rate limit**.
 
-**Example:** Server allows 60 requests/minute, client sends 61st
+```python
+from fastapi import FastAPI, HTTPException
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 
-**Response:**
-```http
-HTTP/1.1 429 Too Many Requests
-Retry-After: 60
-X-RateLimit-Limit: 60
-X-RateLimit-Remaining: 0
-X-RateLimit-Reset: 1642771200
+app = FastAPI()
+limiter = Limiter(key_func=get_remote_address)
 
-{"error": "Too Many Requests", "message": "Rate limit exceeded. Try again in 60 seconds."}
+@app.get("/api/data")
+@limiter.limit("60/minute")
+async def get_data(request):
+    return {"data": "example"}
+
+# Client exceeds limit (61st request):
+# Response: 429 Too Many Requests
+# Headers: Retry-After: 60, X-RateLimit-Limit: 60
 ```
 
 ---
@@ -1137,34 +1249,39 @@ X-RateLimit-Reset: 1642771200
 
 ### **500 Internal Server Error**
 
-Generic server error. **Unexpected condition** occurred:
-- Unhandled exception
-- Database connection failure
-- Code bug
+Generic server error. **Unexpected condition** occurred.
 
-**Response:**
-```http
-HTTP/1.1 500 Internal Server Error
+```python
+from fastapi import FastAPI
 
-{"error": "Internal Server Error"}
+app = FastAPI()
+
+@app.get("/api/data")
+async def get_data():
+    try:
+        # Some operation that fails
+        result = perform_operation()
+        return result
+    except Exception as e:
+        # Don't expose sensitive error details
+        return {"error": "Internal Server Error"}
 ```
-
-NOTE: Don't expose sensitive error details to clients (security risk).
 
 ### **501 Not Implemented**
 
-Server **doesn't support** requested functionality (but might in the future).
+Server **doesn't support** requested functionality.
 
-**Example:**
-```http
-OPTIONS /api/future-feature HTTP/1.1
-```
+```python
+from fastapi import FastAPI, HTTPException
 
-**Response:**
-```http
-HTTP/1.1 501 Not Implemented
+app = FastAPI()
 
-{"error": "Not Implemented", "message": "This feature is not yet available"}
+@app.get("/api/future-feature")
+async def future_feature():
+    raise HTTPException(
+        status_code=501,
+        detail="This feature is not yet available"
+    )
 ```
 
 ### **502 Bad Gateway**
@@ -1186,17 +1303,23 @@ You'll see this when your backend crashes but Nginx is still running.
 
 ### **503 Service Unavailable**
 
-Server **temporarily unable** to handle request:
-- Maintenance mode
-- Overloaded with traffic
-- Dependency down
+Server **temporarily unable** to handle request.
 
-**Response:**
-```http
-HTTP/1.1 503 Service Unavailable
-Retry-After: 3600
+```python
+from fastapi import FastAPI, HTTPException
 
-{"error": "Service Unavailable", "message": "Undergoing maintenance. Try again in 1 hour."}
+app = FastAPI()
+MAINTENANCE_MODE = True
+
+@app.get("/api/data")
+async def get_data():
+    if MAINTENANCE_MODE:
+        raise HTTPException(
+            status_code=503,
+            detail="Undergoing maintenance. Try again in 1 hour.",
+            headers={"Retry-After": "3600"}
+        )
+    return {"data": "example"}
 ```
 
 ### **504 Gateway Timeout**
@@ -1247,21 +1370,29 @@ HTTP caching is a technique to **store copies of responses** for reuse, reducing
 
 #### **Initial Request (No Cache)**
 
-**Request:**
-```http
-GET /api/resource HTTP/1.1
-Host: api.example.com
-```
+**Python FastAPI Server:**
+```python
+from fastapi import FastAPI
+from fastapi.responses import JSONResponse
+from datetime import datetime
+import hashlib
 
-**Response:**
-```http
-HTTP/1.1 200 OK
-Cache-Control: max-age=10
-ETag: "3141"
-Last-Modified: Tue, 21 Jan 2025 10:00:00 GMT
-Content-Type: application/json
+app = FastAPI()
 
-{"data": "some resource data"}
+@app.get("/api/resource")
+async def get_resource():
+    data = {"data": "some resource data"}
+    # Generate ETag (hash of content)
+    etag = '"' + hashlib.md5(str(data).encode()).hexdigest()[:4] + '"'
+    
+    return JSONResponse(
+        content=data,
+        headers={
+            "Cache-Control": "max-age=10",
+            "ETag": etag,
+            "Last-Modified": datetime.utcnow().strftime('%a, %d %b %Y %H:%M:%S GMT')
+        }
+    )
 ```
 
 **Breaking down the headers:**
@@ -1287,15 +1418,40 @@ Client stores response in cache with these metadata.
 
 After 10 seconds, `max-age` expires. Client needs to revalidate.
 
-**Request:**
-```http
-GET /api/resource HTTP/1.1
-Host: api.example.com
-If-None-Match: "3141"
-If-Modified-Since: Tue, 21 Jan 2025 10:00:00 GMT
+**Python FastAPI Server:**
+```python
+from fastapi import FastAPI, Header
+from fastapi.responses import Response, JSONResponse
+from typing import Optional
+from datetime import datetime
+
+app = FastAPI()
+resource_etag = '"3141"'
+resource_data = {"data": "some resource data"}
+
+@app.get("/api/resource")
+async def get_resource(
+    if_none_match: Optional[str] = Header(None),
+    if_modified_since: Optional[str] = Header(None)
+):
+    # Client has cached version with this ETag
+    if if_none_match == resource_etag:
+        return Response(
+            status_code=304,  # Not Modified
+            headers={"ETag": resource_etag, "Cache-Control": "max-age=10"}
+        )
+    
+    # Resource unchanged
+    return JSONResponse(
+        content=resource_data,
+        headers={
+            "ETag": resource_etag,
+            "Cache-Control": "max-age=10"
+        }
+    )
 ```
 
-**New conditional headers:**
+**Client sends conditional headers:**
 
 1. **`If-None-Match: "3141"`**
    - "If the ETag is NOT '3141' (meaning content changed), send new data"
@@ -1305,18 +1461,7 @@ If-Modified-Since: Tue, 21 Jan 2025 10:00:00 GMT
    - "If modified after this date, send new data"
    - "Otherwise, tell me nothing changed"
 
-**Server checks:**
-- Current ETag: `"3141"` (matches request)
-- Last modified: `Tue, 21 Jan 2025 10:00:00 GMT` (same as request)
-
-**Response:**
-```http
-HTTP/1.1 304 Not Modified
-ETag: "3141"
-Cache-Control: max-age=10
-```
-
-**`304 Not Modified`** means:
+**`304 Not Modified`** response means:
 - ✅ Resource hasn't changed
 - ✅ Use your cached version
 - ✅ **No response body** (saves bandwidth!)
@@ -1329,46 +1474,36 @@ Client uses cached data without downloading again.
 
 Meanwhile, resource was updated on server.
 
-**Update operation:**
-```http
-POST /api/resource/update HTTP/1.1
-Content-Type: application/json
+**Python FastAPI Server:**
+```python
+from fastapi import FastAPI, Header
+from fastapi.responses import JSONResponse, Response
+from typing import Optional
+import hashlib
 
-{"data": "updated content"}
-```
+app = FastAPI()
+resource_data = {"data": "updated content"}  # Changed!
+current_etag = '"2943"'  # New ETag
 
-**Response:**
-```http
-HTTP/1.1 200 OK
-ETag: "2943"  ← NEW ETag!
-
-{"message": "Updated successfully"}
-```
-
-Server changed resource → new ETag generated.
-
-**Now client requests resource again:**
-```http
-GET /api/resource HTTP/1.1
-Host: api.example.com
-If-None-Match: "3141"  ← OLD ETag from cache
-If-Modified-Since: Tue, 21 Jan 2025 10:00:00 GMT
-```
-
-**Server checks:**
-- Client has ETag: `"3141"`
-- Current ETag: `"2943"` → **DIFFERENT!**
-- Resource was modified → **Send new data**
-
-**Response:**
-```http
-HTTP/1.1 200 OK
-ETag: "2943"
-Last-Modified: Tue, 21 Jan 2025 10:15:00 GMT
-Cache-Control: max-age=10
-Content-Type: application/json
-
-{"data": "updated content"}
+@app.get("/api/resource")
+async def get_resource(if_none_match: Optional[str] = Header(None)):
+    # Client has old ETag: "3141"
+    # Server has new ETag: "2943"
+    if if_none_match and if_none_match != current_etag:
+        # ETags don't match → Content changed
+        return JSONResponse(
+            content=resource_data,
+            headers={
+                "ETag": current_etag,
+                "Cache-Control": "max-age=10"
+            }
+        )
+    
+    # Return new content with new ETag
+    return JSONResponse(
+        content=resource_data,
+        headers={"ETag": current_etag}
+    )
 ```
 
 **`200 OK`** with **full response body** because content changed.
