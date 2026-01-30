@@ -189,18 +189,23 @@ After (with passwords):
 **What is Hashing?**
 One-way cryptographic function that transforms text into irreversible fixed-length string.
 
-```javascript
-Input: "myPassword123"
-  ↓ Hash Function (SHA-256)
-Output: "ef92b778bce853e59f8c..."
+```python
+import hashlib
 
-Input: "password"  
-  ↓ Hash Function (SHA-256)
-Output: "5e884898da28047151d0..."
+# Input: "myPassword123"
+password = "myPassword123"
+hash_obj = hashlib.sha256(password.encode())
+# Output: "ef92b778bce853e59f8c..."
 
-Input: "myPassword123" (same as first)
-  ↓ Hash Function (SHA-256)  
-Output: "ef92b778bce853e59f8c..." (same hash!)
+# Input: "password"
+password2 = "password"
+hash_obj2 = hashlib.sha256(password2.encode())
+# Output: "5e884898da28047151d0..."
+
+# Input: "myPassword123" (same as first)
+password3 = "myPassword123"
+hash_obj3 = hashlib.sha256(password3.encode())
+# Output: "ef92b778bce853e59f8c..." (same hash!)
 ```
 
 **Key Properties**:
@@ -210,29 +215,34 @@ Output: "ef92b778bce853e59f8c..." (same hash!)
 4. **Collision resistant**: Different inputs → different outputs
 
 **How It Works**:
-```javascript
-// Registration
-User submits: "myPassword123"
-Server hashes: "ef92b778bce..."
-Server stores: "ef92b778bce..." (only hash, not password)
+```python
+import hashlib
 
-// Login
-User submits: "myPassword123"
-Server hashes: "ef92b778bce..."
-Server compares: stored_hash === new_hash
-Match → Authenticated!
+# Registration
+password = "myPassword123"
+hashed = hashlib.sha256(password.encode()).hexdigest()
+# Server stores: "ef92b778bce..." (only hash, not password)
+
+# Login
+password_attempt = "myPassword123"
+hashed_attempt = hashlib.sha256(password_attempt.encode()).hexdigest()
+# Server compares: stored_hash == new_hash
+# Match → Authenticated!
 ```
 
 **Why Secure**: Even if database stolen, attackers only get hashes (can't reverse)
 
 **Modern Enhancement - Salting**:
-```javascript
-Password: "myPassword123"
-Salt: "x9k2m5p8" (random per user)
-Combined: "myPassword123x9k2m5p8"
-Hash: "9f7j4k2p..." (stored with salt)
+```python
+import hashlib
+import secrets
 
-// Same password, different users → different hashes!
+password = "myPassword123"
+salt = secrets.token_hex(8)  # "x9k2m5p8" (random per user)
+combined = password + salt
+hashed = hashlib.sha256(combined.encode()).hexdigest()  # "9f7j4k2p..." (stored with salt)
+
+# Same password, different users → different hashes!
 ```
 
 ### 1970s: Asymmetric Cryptography Revolution
@@ -579,31 +589,47 @@ HMACSHA256(
 
 #### JWT Workflow
 
-```javascript
-// LOGIN
-POST /login → Server validates credentials
-  ↓
-Server creates JWT:
-  const payload = {
-    sub: user.id,
-    role: user.role,
-    exp: Date.now() + 3600
-  };
-  const token = jwt.sign(payload, SECRET_KEY);
-  ↓
-Returns: {token: "eyJhbGc..."}
+```python
+from datetime import datetime, timedelta
+import jwt
+from fastapi import FastAPI, HTTPException, Depends
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
-// AUTHENTICATED REQUEST
-GET /api/profile
-Headers: Authorization: Bearer eyJhbGc...
-  ↓
-Server extracts token
-  ↓
-jwt.verify(token, SECRET_KEY)
-  ↓
-If valid: decoded = {sub: "123", role: "admin"}
-  ↓
-Process request (NO database lookup!)
+app = FastAPI()
+security = HTTPBearer()
+SECRET_KEY = "your-secret-key"
+
+# LOGIN
+@app.post("/login")
+async def login(credentials: dict):
+    # Server validates credentials
+    user = await validate_user(credentials)
+    
+    # Server creates JWT
+    payload = {
+        "sub": str(user.id),
+        "role": user.role,
+        "exp": datetime.utcnow() + timedelta(hours=1)
+    }
+    token = jwt.encode(payload, SECRET_KEY, algorithm="HS256")
+    
+    return {"token": token}
+
+# AUTHENTICATED REQUEST
+async def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    try:
+        # Server extracts and verifies token
+        token = credentials.credentials
+        decoded = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
+        # If valid: decoded = {"sub": "123", "role": "admin"}
+        return decoded
+    except jwt.PyJWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+@app.get("/api/profile")
+async def get_profile(user: dict = Depends(verify_token)):
+    # Process request (NO database lookup!)
+    return {"user_id": user["sub"], "role": user["role"]}
 ```
 
 ## JWT Authentication Flow Diagram
@@ -707,18 +733,22 @@ JWT: Token valid until expiration ✗
 ```
 
 **Solutions**:
-```javascript
-// Option 1: Short expiration + Refresh tokens
-access_token: expires 15min
-refresh_token: expires 7 days, stored server-side, can revoke
+```python
+from datetime import timedelta
 
-// Option 2: Blacklist
-REVOKED_JWTS = Set();
-if (REVOKED_JWTS.has(token.jti)) reject();
-// But this defeats "stateless"!
+# Option 1: Short expiration + Refresh tokens
+access_token_expires = timedelta(minutes=15)
+refresh_token_expires = timedelta(days=7)
+# refresh_token: stored server-side, can revoke
 
-// Option 3: Change secret (nuclear option)
-Change SECRET_KEY → All users logged out globally
+# Option 2: Blacklist
+REVOKED_JWTS = set()
+if token_jti in REVOKED_JWTS:
+    raise HTTPException(status_code=401, detail="Token revoked")
+# But this defeats "stateless"!
+
+# Option 3: Change secret (nuclear option)
+# Change SECRET_KEY → All users logged out globally
 ```
 
 **2. Token Size**
@@ -869,79 +899,85 @@ CLIENT                          SERVER
 
 ### Implementation Example
 
-```javascript
-const express = require('express');
-const Redis = require('ioredis');
-const crypto = require('crypto');
+```python
+from fastapi import FastAPI, HTTPException, Depends, Response, Cookie
+from fastapi.responses import JSONResponse
+import redis.asyncio as redis
+import secrets
+import json
+from datetime import datetime
+from typing import Optional
 
-const app = express();
-const redis = new Redis();
+app = FastAPI()
+redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
 
-// LOGIN
-app.post('/api/login', async (req, res) => {
-  const user = await validateUser(req.body);
-  
-  // Generate session ID
-  const sessionId = crypto.randomBytes(32).toString('hex');
-  
-  // Store in Redis
-  await redis.setex(
-    `sess:${sessionId}`,
-    3600,  // 1 hour TTL
-    JSON.stringify({
-      user_id: user.id,
-      role: user.role,
-      created_at: Date.now()
+# LOGIN
+@app.post('/api/login')
+async def login(credentials: dict, response: Response):
+    user = await validate_user(credentials)
+    
+    # Generate session ID
+    session_id = secrets.token_hex(32)
+    
+    # Store in Redis
+    session_data = json.dumps({
+        "user_id": user.id,
+        "role": user.role,
+        "created_at": datetime.utcnow().isoformat()
     })
-  );
-  
-  // Set cookie
-  res.cookie('session_id', sessionId, {
-    httpOnly: true,
-    secure: true,
-    sameSite: 'strict',
-    maxAge: 3600000
-  });
-  
-  res.json({message: "Logged in"});
-});
+    await redis_client.setex(
+        f"sess:{session_id}",
+        3600,  # 1 hour TTL
+        session_data
+    )
+    
+    # Set cookie
+    response.set_cookie(
+        key="session_id",
+        value=session_id,
+        httponly=True,
+        secure=True,
+        samesite="strict",
+        max_age=3600
+    )
+    
+    return {"message": "Logged in"}
 
-// AUTH MIDDLEWARE
-const requireAuth = async (req, res, next) => {
-  const sessionId = req.cookies.session_id;
-  
-  if (!sessionId) {
-    return res.status(401).json({error: "Not authenticated"});
-  }
-  
-  const data = await redis.get(`sess:${sessionId}`);
-  
-  if (!data) {
-    return res.status(401).json({error: "Session expired"});
-  }
-  
-  req.user = JSON.parse(data);
-  
-  // Extend session
-  await redis.expire(`sess:${sessionId}`, 3600);
-  
-  next();
-};
+# AUTH DEPENDENCY
+async def require_auth(session_id: Optional[str] = Cookie(None)):
+    if not session_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    data = await redis_client.get(f"sess:{session_id}")
+    
+    if not data:
+        raise HTTPException(status_code=401, detail="Session expired")
+    
+    user = json.loads(data)
+    
+    # Extend session
+    await redis_client.expire(f"sess:{session_id}", 3600)
+    
+    return user
 
-// PROTECTED ROUTE
-app.get('/api/profile', requireAuth, (req, res) => {
-  res.json({
-    user_id: req.user.user_id,
-    role: req.user.role
-  });
-});
+# PROTECTED ROUTE
+@app.get('/api/profile')
+async def get_profile(user: dict = Depends(require_auth)):
+    return {
+        "user_id": user["user_id"],
+        "role": user["role"]
+    }
 
-// LOGOUT
-app.post('/api/logout', requireAuth, async (req, res) => {
-  await redis.del(`sess:${req.cookies.session_id}`);
-  res.clearCookie('session_id');
-  res.json({message: "Logged out"});
-});
+# LOGOUT
+@app.post('/api/logout')
+async def logout(
+    response: Response,
+    session_id: Optional[str] = Cookie(None),
+    user: dict = Depends(require_auth)
+):
+    await redis_client.delete(f"sess:{session_id}")
+    response.delete_cookie("session_id")
+    return {"message": "Logged out"}
 ```
 
 ## 2. Stateless Authentication (JWT)
@@ -992,12 +1028,16 @@ CLIENT                          SERVER
 
 ### Implementation Example
 
-```javascript
-const express = require('express');
-const jwt = require('jsonwebtoken');
+```python
+from fastapi import FastAPI, HTTPException, Depends
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+import jwt
+from datetime import datetime, timedelta
+import os
 
-const app = express();
-const SECRET_KEY = process.env.JWT_SECRET;
+app = FastAPI()
+security = HTTPBearer()
+SECRET_KEY = os.getenv("JWT_SECRET")
 
 // LOGIN
 app.post('/api/login', async (req, res) => {
@@ -1124,69 +1164,68 @@ Why? Your app wants ChatGPT features without the UI
 
 ### Implementation Example
 
-```javascript
-// GENERATE API KEY
-app.post('/api/keys', requireAuth, async (req, res) => {
-  const apiKey = `sk_${crypto.randomBytes(32).toString('hex')}`;
-  
-  const hashedKey = crypto
-    .createHash('sha256')
-    .update(apiKey)
-    .digest('hex');
-  
-  await db.apiKeys.insert({
-    key_hash: hashedKey,
-    user_id: req.user.id,
-    permissions: ['read', 'write'],
-    created_at: new Date(),
-    last_used: null
-  });
-  
-  // Show once, then only show hash
-  res.json({
-    api_key: apiKey,
-    message: "Save this key - you won't see it again!"
-  });
-});
+```python
+from fastapi import FastAPI, HTTPException, Depends
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+import hashlib
+import secrets
+from datetime import datetime
+from typing import Optional
 
-// VALIDATE API KEY
-const validateApiKey = async (req, res, next) => {
-  const apiKey = req.headers.authorization?.replace('Bearer ', '');
-  
-  if (!apiKey) {
-    return res.status(401).json({error: "API key required"});
-  }
-  
-  const hashedKey = crypto
-    .createHash('sha256')
-    .update(apiKey)
-    .digest('hex');
-  
-  const keyData = await db.apiKeys.findOne({key_hash: hashedKey});
-  
-  if (!keyData) {
-    return res.status(401).json({error: "Invalid API key"});
-  }
-  
-  // Update last used
-  await db.apiKeys.update(
-    {_id: keyData._id},
-    {$set: {last_used: new Date()}}
-  );
-  
-  req.apiKey = keyData;
-  next();
-};
+app = FastAPI()
+security = HTTPBearer()
 
-// PROTECTED API ENDPOINT
-app.get('/api/data', validateApiKey, async (req, res) => {
-  if (!req.apiKey.permissions.includes('read')) {
-    return res.status(403).json({error: "Permission denied"});
-  }
-  
-  const data = await fetchData(req.apiKey.user_id);
-  res.json(data);
-});
+# GENERATE API KEY
+@app.post('/api/keys')
+async def generate_api_key(user: dict = Depends(require_auth)):
+    api_key = f"sk_{secrets.token_hex(32)}"
+    
+    hashed_key = hashlib.sha256(api_key.encode()).hexdigest()
+    
+    await db.api_keys.insert_one({
+        "key_hash": hashed_key,
+        "user_id": user["id"],
+        "permissions": ["read", "write"],
+        "created_at": datetime.utcnow(),
+        "last_used": None
+    })
+    
+    # Show once, then only show hash
+    return {
+        "api_key": api_key,
+        "message": "Save this key - you won't see it again!"
+    }
+
+# VALIDATE API KEY
+async def validate_api_key(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    api_key = credentials.credentials
+    
+    if not api_key:
+        raise HTTPException(status_code=401, detail="API key required")
+    
+    hashed_key = hashlib.sha256(api_key.encode()).hexdigest()
+    
+    key_data = await db.api_keys.find_one({"key_hash": hashed_key})
+    
+    if not key_data:
+        raise HTTPException(status_code=401, detail="Invalid API key")
+    
+    # Update last used
+    await db.api_keys.update_one(
+        {"_id": key_data["_id"]},
+        {"$set": {"last_used": datetime.utcnow()}}
+    )
+    
+    return key_data
+
+# PROTECTED API ENDPOINT
+@app.get('/api/data')
+async def get_data(api_key: dict = Depends(validate_api_key)):
+    if "read" not in api_key["permissions"]:
+        raise HTTPException(status_code=403, detail="Permission denied")
+    
+    data = await fetch_data(api_key["user_id"])
+    return data
 ```
 
 ### Best Practices
@@ -1374,79 +1413,88 @@ OpenID Connect returns:
 
 ### Implementation Example
 
-```javascript
-const express = require('express');
-const axios = require('axios');
+```python
+from fastapi import FastAPI, HTTPException, Response
+from fastapi.responses import RedirectResponse
+import httpx
+import jwt
+import os
+from datetime import datetime
 
-const app = express();
+app = FastAPI()
 
-const GOOGLE_CONFIG = {
-  client_id: process.env.GOOGLE_CLIENT_ID,
-  client_secret: process.env.GOOGLE_CLIENT_SECRET,
-  redirect_uri: 'http://localhost:3000/auth/google/callback',
-  auth_url: 'https://accounts.google.com/o/oauth2/v2/auth',
-  token_url: 'https://oauth2.googleapis.com/token'
-};
+GOOGLE_CONFIG = {
+    "client_id": os.getenv("GOOGLE_CLIENT_ID"),
+    "client_secret": os.getenv("GOOGLE_CLIENT_SECRET"),
+    "redirect_uri": "http://localhost:8000/auth/google/callback",
+    "auth_url": "https://accounts.google.com/o/oauth2/v2/auth",
+    "token_url": "https://oauth2.googleapis.com/token"
+}
 
-// INITIATE LOGIN
-app.get('/auth/google', (req, res) => {
-  const authUrl = `${GOOGLE_CONFIG.auth_url}?` +
-    `client_id=${GOOGLE_CONFIG.client_id}&` +
-    `redirect_uri=${GOOGLE_CONFIG.redirect_uri}&` +
-    `response_type=code&` +
-    `scope=openid email profile`;
-  
-  res.redirect(authUrl);
-});
+# INITIATE LOGIN
+@app.get('/auth/google')
+async def auth_google():
+    auth_url = (
+        f"{GOOGLE_CONFIG['auth_url']}?"
+        f"client_id={GOOGLE_CONFIG['client_id']}&"
+        f"redirect_uri={GOOGLE_CONFIG['redirect_uri']}&"
+        f"response_type=code&"
+        f"scope=openid email profile"
+    )
+    return RedirectResponse(url=auth_url)
 
-// CALLBACK
-app.get('/auth/google/callback', async (req, res) => {
-  const {code} = req.query;
-  
-  try {
-    // Exchange code for tokens
-    const tokenResponse = await axios.post(GOOGLE_CONFIG.token_url, {
-      code,
-      client_id: GOOGLE_CONFIG.client_id,
-      client_secret: GOOGLE_CONFIG.client_secret,
-      redirect_uri: GOOGLE_CONFIG.redirect_uri,
-      grant_type: 'authorization_code'
-    });
-    
-    const {access_token, id_token} = tokenResponse.data;
-    
-    // Decode ID token (or verify with Google)
-    const userInfo = jwt.decode(id_token);
-    
-    // Find or create user
-    let user = await db.users.findOne({google_id: userInfo.sub});
-    
-    if (!user) {
-      user = await db.users.insert({
-        google_id: userInfo.sub,
-        email: userInfo.email,
-        name: userInfo.name,
-        picture: userInfo.picture,
-        created_at: new Date()
-      });
-    }
-    
-    // Create your own session/JWT
-    const sessionId = await createSession(user);
-    
-    res.cookie('session_id', sessionId, {
-      httpOnly: true,
-      secure: true,
-      sameSite: 'strict'
-    });
-    
-    res.redirect('/dashboard');
-    
-  } catch (err) {
-    console.error('OAuth error:', err);
-    res.redirect('/login?error=oauth_failed');
-  }
-});
+# CALLBACK
+@app.get('/auth/google/callback')
+async def auth_google_callback(code: str, response: Response):
+    try:
+        # Exchange code for tokens
+        async with httpx.AsyncClient() as client:
+            token_response = await client.post(
+                GOOGLE_CONFIG["token_url"],
+                data={
+                    "code": code,
+                    "client_id": GOOGLE_CONFIG["client_id"],
+                    "client_secret": GOOGLE_CONFIG["client_secret"],
+                    "redirect_uri": GOOGLE_CONFIG["redirect_uri"],
+                    "grant_type": "authorization_code"
+                }
+            )
+        
+        tokens = token_response.json()
+        access_token = tokens["access_token"]
+        id_token = tokens["id_token"]
+        
+        # Decode ID token (or verify with Google)
+        user_info = jwt.decode(id_token, options={"verify_signature": False})
+        
+        # Find or create user
+        user = await db.users.find_one({"google_id": user_info["sub"]})
+        
+        if not user:
+            user = await db.users.insert_one({
+                "google_id": user_info["sub"],
+                "email": user_info["email"],
+                "name": user_info["name"],
+                "picture": user_info["picture"],
+                "created_at": datetime.utcnow()
+            })
+        
+        # Create your own session/JWT
+        session_id = await create_session(user)
+        
+        response.set_cookie(
+            key="session_id",
+            value=session_id,
+            httponly=True,
+            secure=True,
+            samesite="strict"
+        )
+        
+        return RedirectResponse(url='/dashboard')
+        
+    except Exception as err:
+        print(f"OAuth error: {err}")
+        return RedirectResponse(url='/login?error=oauth_failed')
 ```
 
 ---
@@ -1522,122 +1570,106 @@ Permissions:
 
 ### Implementation Example
 
-```javascript
-// DEFINE ROLES AND PERMISSIONS
-const ROLES = {
-  user: {
-    permissions: [
-      'notes:read:own',
-      'notes:write:own',
-      'notes:delete:own'
-    ]
-  },
-  moderator: {
-    permissions: [
-      'notes:read:all',
-      'notes:delete:all'
-    ]
-  },
-  admin: {
-    permissions: [
-      'notes:read:all',
-      'notes:write:all',
-      'notes:delete:all',
-      'users:manage',
-      'settings:configure'
-    ]
-  }
-};
+```python
+from fastapi import FastAPI, HTTPException, Depends
+from typing import List, Dict
 
-// AUTHORIZATION MIDDLEWARE
-const requirePermission = (permission) => {
-  return (req, res, next) => {
-    if (!req.user) {
-      return res.status(401).json({error: "Not authenticated"});
+app = FastAPI()
+
+# DEFINE ROLES AND PERMISSIONS
+ROLES: Dict[str, Dict[str, List[str]]] = {
+    "user": {
+        "permissions": [
+            "notes:read:own",
+            "notes:write:own",
+            "notes:delete:own"
+        ]
+    },
+    "moderator": {
+        "permissions": [
+            "notes:read:all",
+            "notes:delete:all"
+        ]
+    },
+    "admin": {
+        "permissions": [
+            "notes:read:all",
+            "notes:write:all",
+            "notes:delete:all",
+            "users:manage",
+            "settings:configure"
+        ]
     }
-    
-    const userRole = req.user.role;
-    const permissions = ROLES[userRole]?.permissions || [];
-    
-    if (!permissions.includes(permission)) {
-      return res.status(403).json({error: "Permission denied"});
-    }
-    
-    next();
-  };
-};
+}
 
-// RESOURCE OWNERSHIP CHECK
-const requireOwnership = async (req, res, next) => {
-  const noteId = req.params.id;
-  const note = await db.notes.findById(noteId);
-  
-  if (!note) {
-    return res.status(404).json({error: "Note not found"});
-  }
-  
-  // Admins and moderators can access all
-  if (['admin', 'moderator'].includes(req.user.role)) {
-    req.note = note;
-    return next();
-  }
-  
-  // Regular users only own notes
-  if (note.user_id !== req.user.user_id) {
-    return res.status(403).json({error: "Not your note"});
-  }
-  
-  req.note = note;
-  next();
-};
+# AUTHORIZATION DEPENDENCY
+def require_permission(permission: str):
+    async def permission_checker(user: dict = Depends(require_auth)):
+        if not user:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        
+        user_role = user.get("role")
+        permissions = ROLES.get(user_role, {}).get("permissions", [])
+        
+        if permission not in permissions:
+            raise HTTPException(status_code=403, detail="Permission denied")
+        
+        return user
+    return permission_checker
 
-// ROUTES
-app.get('/api/notes', 
-  requireAuth,
-  requirePermission('notes:read:own'),
-  async (req, res) => {
-    let notes;
+# RESOURCE OWNERSHIP CHECK
+async def require_ownership(note_id: str, user: dict = Depends(require_auth)):
+    note = await db.notes.find_one({"_id": note_id})
     
-    if (ROLES[req.user.role].permissions.includes('notes:read:all')) {
-      // Admin/moderator: all notes
-      notes = await db.notes.find({});
-    } else {
-      // Regular user: own notes only
-      notes = await db.notes.find({user_id: req.user.user_id});
-    }
+    if not note:
+        raise HTTPException(status_code=404, detail="Note not found")
     
-    res.json(notes);
-  }
-);
+    # Admins and moderators can access all
+    if user["role"] in ["admin", "moderator"]:
+        return note
+    
+    # Regular users only own notes
+    if note["user_id"] != user["user_id"]:
+        raise HTTPException(status_code=403, detail="Not your note")
+    
+    return note
 
-app.delete('/api/notes/:id',
-  requireAuth,
-  requireOwnership,
-  requirePermission('notes:delete:own'),
-  async (req, res) => {
-    await db.notes.delete(req.note._id);
-    res.json({message: "Note deleted"});
-  }
-);
+# ROUTES
+@app.get('/api/notes')
+async def get_notes(user: dict = Depends(require_permission('notes:read:own'))):
+    if "notes:read:all" in ROLES[user["role"]]["permissions"]:
+        # Admin/moderator: all notes
+        notes = await db.notes.find().to_list(length=None)
+    else:
+        # Regular user: own notes only
+        notes = await db.notes.find({"user_id": user["user_id"]}).to_list(length=None)
+    
+    return notes
 
-app.post('/api/users/:id/role',
-  requireAuth,
-  requirePermission('users:manage'),
-  async (req, res) => {
-    const {role} = req.body;
+@app.delete('/api/notes/{note_id}')
+async def delete_note(
+    note_id: str,
+    user: dict = Depends(require_permission('notes:delete:own')),
+    note: dict = Depends(require_ownership)
+):
+    await db.notes.delete_one({"_id": note["_id"]})
+    return {"message": "Note deleted"}
+
+@app.post('/api/users/{user_id}/role')
+async def update_user_role(
+    user_id: str,
+    role: str,
+    user: dict = Depends(require_permission('users:manage'))
+):
+    if role not in ROLES:
+        raise HTTPException(status_code=400, detail="Invalid role")
     
-    if (!ROLES[role]) {
-      return res.status(400).json({error: "Invalid role"});
-    }
+    await db.users.update_one(
+        {"_id": user_id},
+        {"$set": {"role": role}}
+    )
     
-    await db.users.update(
-      {_id: req.params.id},
-      {$set: {role}}
-    );
-    
-    res.json({message: "Role updated"});
-  }
-);
+    return {"message": "Role updated"}
 ```
 
 ### Database Schema
@@ -1692,14 +1724,12 @@ CREATE TABLE notes (
 ### The Problem
 
 **Bad (Information Leak)**:
-```javascript
-// Login attempt
-if (!user) {
-  return res.json({error: "User not found"});
-}
-if (!passwordMatch) {
-  return res.json({error: "Incorrect password"});
-}
+```python
+# Login attempt
+if not user:
+    return {"error": "User not found"}
+if not password_match:
+    return {"error": "Incorrect password"}
 ```
 
 **Why Bad**: Attacker learns:
@@ -1707,10 +1737,9 @@ if (!passwordMatch) {
 - "Incorrect password" → Email exists, attack this account!
 
 **Good (Generic Message)**:
-```javascript
-if (!user || !passwordMatch) {
-  return res.json({error: "Invalid credentials"});
-}
+```python
+if not user or not password_match:
+    return {"error": "Invalid credentials"}
 ```
 
 **Principle**: Never confirm which part failed
@@ -1718,30 +1747,27 @@ if (!user || !passwordMatch) {
 ### Examples of Information Leaks
 
 **Registration**:
-```javascript
-// ❌ Bad
-if (await db.users.findOne({email})) {
-  return res.json({error: "Email already registered"});
-}
+```python
+# ❌ Bad
+if await db.users.find_one({"email": email}):
+    return {"error": "Email already registered"}
 
-// ✓ Good  
-if (await db.users.findOne({email})) {
-  // Still create account (idempotent)
-  // Or generic: "Check your email for confirmation"
-  return res.json({message: "Account created, check email"});
-}
+# ✓ Good
+if await db.users.find_one({"email": email}):
+    # Still create account (idempotent)
+    # Or generic: "Check your email for confirmation"
+    return {"message": "Account created, check email"}
 ```
 
 **Password Reset**:
-```javascript
-// ❌ Bad
-if (!user) {
-  return res.json({error: "Email not found"});
-}
+```python
+# ❌ Bad
+if not user:
+    return {"error": "Email not found"}
 
-// ✓ Good
-// Always say email sent (even if not)
-return res.json({message: "If email exists, reset link sent"});
+# ✓ Good
+# Always say email sent (even if not)
+return {"message": "If email exists, reset link sent"}
 ```
 
 ## 2. Timing Attacks
@@ -1780,106 +1806,110 @@ valid_usernames = [u for u, t in times if t > 100ms]
 ### The Solution
 
 **Option 1: Constant-Time Operations**
-```javascript
-const crypto = require('crypto');
+```python
+import hmac
 
-// Use constant-time comparison
-function constantTimeCompare(a, b) {
-  if (a.length !== b.length) {
-    return false;
-  }
-  
-  // Node.js built-in constant-time
-  return crypto.timingSafeEqual(
-    Buffer.from(a),
-    Buffer.from(b)
-  );
-}
+# Use constant-time comparison
+def constant_time_compare(a: str, b: str) -> bool:
+    if len(a) != len(b):
+        return False
+    
+    # Python built-in constant-time comparison
+    return hmac.compare_digest(a.encode(), b.encode())
 ```
 
 **Option 2: Simulate Delay**
-```javascript
-app.post('/login', async (req, res) => {
-  const start = Date.now();
-  
-  const user = await db.users.findOne({email: req.body.email});
-  
-  let valid = false;
-  if (user) {
-    valid = await bcrypt.compare(req.body.password, user.password_hash);
-  } else {
-    // Fake hash comparison even if user doesn't exist
-    await bcrypt.compare(req.body.password, '$2b$10$fakehash...');
-  }
-  
-  // Ensure minimum response time (e.g., 200ms)
-  const elapsed = Date.now() - start;
-  if (elapsed < 200) {
-    await new Promise(resolve => setTimeout(resolve, 200 - elapsed));
-  }
-  
-  if (!valid) {
-    return res.status(401).json({error: "Invalid credentials"});
-  }
-  
-  // Continue with login...
-});
+```python
+import time
+import bcrypt
+from fastapi import FastAPI, HTTPException
+
+app = FastAPI()
+
+@app.post('/login')
+async def login(credentials: dict):
+    start = time.time()
+    
+    user = await db.users.find_one({"email": credentials["email"]})
+    
+    valid = False
+    if user:
+        valid = bcrypt.checkpw(
+            credentials["password"].encode(),
+            user["password_hash"].encode()
+        )
+    else:
+        # Fake hash comparison even if user doesn't exist
+        bcrypt.checkpw(
+            credentials["password"].encode(),
+            b'$2b$12$fakehash...'
+        )
+    
+    # Ensure minimum response time (e.g., 200ms)
+    elapsed = time.time() - start
+    if elapsed < 0.2:
+        await asyncio.sleep(0.2 - elapsed)
+    
+    if not valid:
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    
+    # Continue with login...
 ```
 
 ## 3. Password Storage
 
 ### Never Store Plain Text
 
-```javascript
-// ❌ NEVER DO THIS
-await db.users.insert({
-  email: "user@example.com",
-  password: "MyPassword123"  // DANGER!
-});
+```python
+# ❌ NEVER DO THIS
+await db.users.insert_one({
+    "email": "user@example.com",
+    "password": "MyPassword123"  # DANGER!
+})
 ```
 
 **Why**: Database breach = all passwords exposed
 
 ### Always Hash + Salt
 
-```javascript
-const bcrypt = require('bcrypt');
+```python
+import bcrypt
+from fastapi import FastAPI, HTTPException
 
-// Registration
-app.post('/register', async (req, res) => {
-  const {email, password} = req.body;
-  
-  // Generate salt and hash
-  const saltRounds = 12;  // Higher = more secure, slower
-  const password_hash = await bcrypt.hash(password, saltRounds);
-  
-  await db.users.insert({
-    email,
-    password_hash  // Store hash, not password!
-  });
-  
-  res.json({message: "Registered"});
-});
+app = FastAPI()
 
-// Login
-app.post('/login', async (req, res) => {
-  const {email, password} = req.body;
-  
-  const user = await db.users.findOne({email});
-  
-  if (!user) {
-    return res.status(401).json({error: "Invalid credentials"});
-  }
-  
-  // Compare provided password with stored hash
-  const valid = await bcrypt.compare(password, user.password_hash);
-  
-  if (!valid) {
-    return res.status(401).json({error: "Invalid credentials"});
-  }
-  
-  // Continue with login...
-});
+# Registration
+@app.post('/register')
+async def register(email: str, password: str):
+    # Generate salt and hash
+    salt = bcrypt.gensalt(rounds=12)  # Higher = more secure, slower
+    password_hash = bcrypt.hashpw(password.encode(), salt)
+    
+    await db.users.insert_one({
+        "email": email,
+        "password_hash": password_hash.decode()  # Store hash, not password!
+    })
+    
+    return {"message": "Registered"}
+
+# Login
+@app.post('/login')
+async def login(email: str, password: str):
+    user = await db.users.find_one({"email": email})
+    
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    
+    # Compare provided password with stored hash
+    valid = bcrypt.checkpw(
+        password.encode(),
+        user["password_hash"].encode()
+    )
+    
+    if not valid:
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    
+    # Continue with login...
 ```
 
 **How bcrypt Works**:
@@ -1894,112 +1924,118 @@ Login:
   User enters: "MyPassword123"
   Extract salt from stored hash: "$2b$12$randomsalthere"
   Compute: bcrypt("MyPassword123", "$2b$12$randomsalthere")
-  Compare: computed hash === stored hash
+  Compare: computed hash == stored hash
   Match → Valid password
 ```
 
 ### Password Requirements
 
-```javascript
-function validatePassword(password) {
-  const errors = [];
-  
-  if (password.length < 12) {
-    errors.push("Minimum 12 characters");
-  }
-  
-  if (!/[a-z]/.test(password)) {
-    errors.push("Must contain lowercase letter");
-  }
-  
-  if (!/[A-Z]/.test(password)) {
-    errors.push("Must contain uppercase letter");
-  }
-  
-  if (!/[0-9]/.test(password)) {
-    errors.push("Must contain number");
-  }
-  
-  if (!/[!@#$%^&*]/.test(password)) {
-    errors.push("Must contain special character");
-  }
-  
-  // Check against common passwords
-  const commonPasswords = ['password', '123456', 'qwerty', ...];
-  if (commonPasswords.includes(password.toLowerCase())) {
-    errors.push("Password too common");
-  }
-  
-  return errors;
-}
+```python
+import re
+from typing import List
+
+def validate_password(password: str) -> List[str]:
+    errors = []
+    
+    if len(password) < 12:
+        errors.append("Minimum 12 characters")
+    
+    if not re.search(r'[a-z]', password):
+        errors.append("Must contain lowercase letter")
+    
+    if not re.search(r'[A-Z]', password):
+        errors.append("Must contain uppercase letter")
+    
+    if not re.search(r'[0-9]', password):
+        errors.append("Must contain number")
+    
+    if not re.search(r'[!@#$%^&*]', password):
+        errors.append("Must contain special character")
+    
+    # Check against common passwords
+    common_passwords = ['password', '123456', 'qwerty']
+    if password.lower() in common_passwords:
+        errors.append("Password too common")
+    
+    return errors
 ```
 
 ## 4. Rate Limiting
 
 ### Prevent Brute Force
 
-```javascript
-const rateLimit = require('express-rate-limit');
+```python
+from fastapi import FastAPI, Request, HTTPException
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
-// Login rate limiting
-const loginLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,  // 15 minutes
-  max: 5,  // 5 attempts per window
-  message: "Too many login attempts, try again later",
-  standardHeaders: true,
-  legacyHeaders: false,
-});
+app = FastAPI()
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-app.post('/login', loginLimiter, async (req, res) => {
-  // Login logic...
-});
+# Login rate limiting
+@app.post('/login')
+@limiter.limit("5/15minutes")  # 5 attempts per 15 minutes
+async def login(request: Request, credentials: dict):
+    # Login logic...
+    pass
 
-// IP-based rate limiting
-const apiLimiter = rateLimit({
-  windowMs: 60 * 1000,  // 1 minute
-  max: 100,  // 100 requests per minute
-});
-
-app.use('/api', apiLimiter);
+# API rate limiting
+@app.get('/api/data')
+@limiter.limit("100/minute")  # 100 requests per minute
+async def get_data(request: Request):
+    # API logic...
+    pass
 ```
 
 ### Account Lockout
 
-```javascript
-app.post('/login', async (req, res) => {
-  const user = await db.users.findOne({email: req.body.email});
-  
-  if (!user) {
-    return res.status(401).json({error: "Invalid credentials"});
-  }
-  
-  // Check if account locked
-  if (user.locked_until && user.locked_until > new Date()) {
-    const minutesLeft = Math.ceil(
-      (user.locked_until - new Date()) / 60000
-    );
-    return res.status(429).json({
-      error: `Account locked. Try again in ${minutesLeft} minutes`
-    });
-  }
-  
-  const valid = await bcrypt.compare(req.body.password, user.password_hash);
-  
-  if (!valid) {
-    // Increment failed attempts
-    const failedAttempts = (user.failed_login_attempts || 0) + 1;
+```python
+import bcrypt
+from datetime import datetime, timedelta
+from fastapi import FastAPI, HTTPException
+
+app = FastAPI()
+
+@app.post('/login')
+async def login(email: str, password: str):
+    user = await db.users.find_one({"email": email})
     
-    if (failedAttempts >= 5) {
-      // Lock account for 30 minutes
-      await db.users.update(
-        {_id: user._id},
-        {
-          $set: {
-            failed_login_attempts: failedAttempts,
-            locked_until: new Date(Date.now() + 30 * 60 * 1000)
-          }
-        }
-      );
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    
+    # Check if account locked
+    if user.get("locked_until") and user["locked_until"] > datetime.utcnow():
+        minutes_left = int(
+            (user["locked_until"] - datetime.utcnow()).total_seconds() / 60
+        )
+        raise HTTPException(
+            status_code=429,
+            detail=f"Account locked. Try again in {minutes_left} minutes"
+        )
+    
+    valid = bcrypt.checkpw(
+        password.encode(),
+        user["password_hash"].encode()
+    )
+    
+    if not valid:
+        # Increment failed attempts
+        failed_attempts = user.get("failed_login_attempts", 0) + 1
+        
+        if failed_attempts >= 5:
+            # Lock account for 30 minutes
+            await db.users.update_one(
+                {"_id": user["_id"]},
+                {
+                    "$set": {
+                        "failed_login_attempts": failed_attempts,
+                        "locked_until": datetime.utcnow() + timedelta(minutes=30)
+                    }
+                }
+            )
       
       return res.status(429).json({
         error: "Too many failed attempts. Account locked for 30 minutes"
@@ -2028,339 +2064,392 @@ app.post('/login', async (req, res) => {
 
 # Part 7: Implementation Guides
 
-## Complete Production Example (Node.js + Express)
+## Complete Production Example (Python + FastAPI)
 
-```javascript
-// ========================================
-// server.js - Complete Production Setup
-// ========================================
+```python
+# ========================================
+# main.py - Complete Production Setup
+# ========================================
 
-const express = require('express');
-const cookieParser = require('cookie-parser');
-const Redis = require('ioredis');
-const bcrypt = require('bcrypt');
-const crypto = require('crypto');
-const rateLimit = require('express-rate-limit');
-const helmet = require('helmet');
+from fastapi import FastAPI, HTTPException, Depends, Response, Request, Cookie
+from fastapi.middleware.cors import CORSMiddleware
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+import redis.asyncio as redis
+import bcrypt
+import secrets
+import json
+import re
+import os
+from datetime import datetime, timedelta
+from typing import Optional, List
+from pydantic import BaseModel
 
-// ========================================
-// Configuration
-// ========================================
+# ========================================
+# Configuration
+# ========================================
 
-const app = express();
-const redis = new Redis({
-  host: process.env.REDIS_HOST || 'localhost',
-  port: process.env.REDIS_PORT || 6379,
-  password: process.env.REDIS_PASSWORD,
-  retryStrategy(times) {
-    return Math.min(times * 50, 2000);
-  }
-});
+app = FastAPI()
 
-const SESSION_TTL = 3600; // 1 hour
-const SESSION_PREFIX = 'sess:';
-const SALT_ROUNDS = 12;
+# Redis connection
+redis_client = redis.Redis(
+    host=os.getenv("REDIS_HOST", "localhost"),
+    port=int(os.getenv("REDIS_PORT", 6379)),
+    password=os.getenv("REDIS_PASSWORD"),
+    decode_responses=True,
+    retry_on_timeout=True
+)
 
-// ========================================
-// Middleware
-// ========================================
+SESSION_TTL = 3600  # 1 hour
+SESSION_PREFIX = "sess:"
+SALT_ROUNDS = 12
 
-app.use(helmet()); // Security headers
-app.use(express.json());
-app.use(cookieParser());
+# Rate limiter
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-// Rate limiting
-const loginLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 5,
-  message: "Too many login attempts"
-});
+# ========================================
+# Models
+# ========================================
 
-// Authentication middleware
-const requireAuth = async (req, res, next) => {
-  try {
-    const sessionId = req.cookies.session_id;
-    
-    if (!sessionId) {
-      return res.status(401).json({error: "Not authenticated"});
-    }
-    
-    const sessionData = await redis.get(SESSION_PREFIX + sessionId);
-    
-    if (!sessionData) {
-      res.clearCookie('session_id');
-      return res.status(401).json({error: "Session expired"});
-    }
-    
-    req.session = JSON.parse(sessionData);
-    req.sessionId = sessionId;
-    
-    // Extend session
-    await redis.expire(SESSION_PREFIX + sessionId, SESSION_TTL);
-    
-    next();
-  } catch (err) {
-    console.error('Auth error:', err);
-    res.status(500).json({error: "Authentication error"});
-  }
-};
+class RegisterRequest(BaseModel):
+    email: str
+    password: str
+    name: str
 
-// Authorization middleware
-const requireRole = (...roles) => {
-  return (req, res, next) => {
-    if (!req.session || !roles.includes(req.session.role)) {
-      return res.status(403).json({error: "Insufficient permissions"});
-    }
-    next();
-  };
-};
+class LoginRequest(BaseModel):
+    email: str
+    password: str
 
-// ========================================
-// Helper Functions
-// ========================================
+# ========================================
+# Middleware
+# ========================================
 
-async function createSession(user, req) {
-  const sessionId = crypto.randomBytes(32).toString('hex');
-  
-  const sessionData = {
-    user_id: user.id,
-    email: user.email,
-    role: user.role,
-    created_at: new Date().toISOString(),
-    ip_address: req.ip,
-    user_agent: req.headers['user-agent']
-  };
-  
-  await redis.setex(
-    SESSION_PREFIX + sessionId,
-    SESSION_TTL,
-    JSON.stringify(sessionData)
-  );
-  
-  return sessionId;
-}
+# CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-function validatePassword(password) {
-  const errors = [];
-  
-  if (password.length < 12) {
-    errors.push("Minimum 12 characters");
-  }
-  if (!/[a-z]/.test(password)) {
-    errors.push("Must contain lowercase");
-  }
-  if (!/[A-Z]/.test(password)) {
-    errors.push("Must contain uppercase");
-  }
-  if (!/[0-9]/.test(password)) {
-    errors.push("Must contain number");
-  }
-  if (!/[!@#$%^&*]/.test(password)) {
-    errors.push("Must contain special character");
-  }
-  
-  return errors;
-}
+# ========================================
+# Dependencies
+# ========================================
 
-// ========================================
-// Routes
-// ========================================
-
-// REGISTER
-app.post('/api/register', async (req, res) => {
-  try {
-    const {email, password, name} = req.body;
-    
-    // Validate input
-    if (!email || !password || !name) {
-      return res.status(400).json({error: "All fields required"});
-    }
-    
-    // Validate password
-    const passwordErrors = validatePassword(password);
-    if (passwordErrors.length > 0) {
-      return res.status(400).json({errors: passwordErrors});
-    }
-    
-    // Check if user exists
-    const existing = await db.users.findOne({email});
-    if (existing) {
-      // Don't reveal user exists - say "check email"
-      return res.json({message: "Check your email to verify account"});
-    }
-    
-    // Hash password
-    const password_hash = await bcrypt.hash(password, SALT_ROUNDS);
-    
-    // Create user
-    const user = await db.users.insert({
-      email,
-      password_hash,
-      name,
-      role: 'user',
-      created_at: new Date(),
-      verified: false
-    });
-    
-    // Send verification email (not implemented here)
-    // await sendVerificationEmail(user);
-    
-    res.json({message: "Check your email to verify account"});
-    
-  } catch (err) {
-    console.error('Registration error:', err);
-    res.status(500).json({error: "Registration failed"});
-  }
-});
-
-// LOGIN
-app.post('/api/login', loginLimiter, async (req, res) => {
-  try {
-    const start = Date.now();
-    const {email, password} = req.body;
-    
-    if (!email || !password) {
-      return res.status(400).json({error: "Email and password required"});
-    }
-    
-    const user = await db.users.findOne({email});
-    
-    let valid = false;
-    if (user) {
-      // Check if locked
-      if (user.locked_until && user.locked_until > new Date()) {
-        const minutes = Math.ceil((user.locked_until - new Date()) / 60000);
-        return res.status(429).json({
-          error: `Account locked. Try again in ${minutes} minutes`
-        });
-      }
-      
-      valid = await bcrypt.compare(password, user.password_hash);
-    } else {
-      // Fake comparison to prevent timing attacks
-      await bcrypt.compare(password, '$2b$12$fakehashtopreventtimingattack');
-    }
-    
-    // Ensure minimum response time (200ms)
-    const elapsed = Date.now() - start;
-    if (elapsed < 200) {
-      await new Promise(resolve => setTimeout(resolve, 200 - elapsed));
-    }
-    
-    if (!valid) {
-      // Increment failed attempts if user exists
-      if (user) {
-        const failedAttempts = (user.failed_login_attempts || 0) + 1;
+# Authentication dependency
+async def require_auth(session_id: Optional[str] = Cookie(None)) -> dict:
+    try:
+        if not session_id:
+            raise HTTPException(status_code=401, detail="Not authenticated")
         
-        if (failedAttempts >= 5) {
-          await db.users.update(
-            {_id: user._id},
-            {
-              $set: {
-                failed_login_attempts: failedAttempts,
-                locked_until: new Date(Date.now() + 30 * 60 * 1000)
-              }
+        session_data = await redis_client.get(SESSION_PREFIX + session_id)
+        
+        if not session_data:
+            raise HTTPException(status_code=401, detail="Session expired")
+        
+        session = json.loads(session_data)
+        
+        # Extend session
+        await redis_client.expire(SESSION_PREFIX + session_id, SESSION_TTL)
+        
+        return {"session": session, "session_id": session_id}
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=500, detail="Authentication error")
+
+# Authorization dependency
+def require_role(*roles: str):
+    async def role_checker(auth_data: dict = Depends(require_auth)):
+        if auth_data["session"]["role"] not in roles:
+            raise HTTPException(status_code=403, detail="Insufficient permissions")
+        return auth_data
+    return role_checker
+
+# ========================================
+# Helper Functions
+# ========================================
+
+async def create_session(user: dict, request: Request) -> str:
+    session_id = secrets.token_hex(32)
+    
+    session_data = {
+        "user_id": user["id"],
+        "email": user["email"],
+        "role": user["role"],
+        "created_at": datetime.utcnow().isoformat(),
+        "ip_address": request.client.host,
+        "user_agent": request.headers.get("user-agent", "")
+    }
+    
+    await redis_client.setex(
+        SESSION_PREFIX + session_id,
+        SESSION_TTL,
+        json.dumps(session_data)
+    )
+    
+    return session_id
+
+def validate_password(password: str) -> List[str]:
+    errors = []
+    
+    if len(password) < 12:
+        errors.append("Minimum 12 characters")
+    if not re.search(r'[a-z]', password):
+        errors.append("Must contain lowercase")
+    if not re.search(r'[A-Z]', password):
+        errors.append("Must contain uppercase")
+    if not re.search(r'[0-9]', password):
+        errors.append("Must contain number")
+    if not re.search(r'[!@#$%^&*]', password):
+        errors.append("Must contain special character")
+    
+    return errors
+
+# ========================================
+# Routes
+# ========================================
+
+# REGISTER
+@app.post('/api/register')
+async def register(data: RegisterRequest):
+    try:
+        # Validate input
+        if not data.email or not data.password or not data.name:
+            raise HTTPException(status_code=400, detail="All fields required")
+        
+        # Validate password
+        password_errors = validate_password(data.password)
+        if password_errors:
+            raise HTTPException(status_code=400, detail={"errors": password_errors})
+        
+        # Check if user exists
+        existing = await db.users.find_one({"email": data.email})
+        if existing:
+            # Don't reveal user exists - say "check email"
+            return {"message": "Check your email to verify account"}
+        
+        # Hash password
+        salt = bcrypt.gensalt(rounds=SALT_ROUNDS)
+        password_hash = bcrypt.hashpw(data.password.encode(), salt).decode()
+        
+        # Create user
+        user = await db.users.insert_one({
+            "email": data.email,
+            "password_hash": password_hash,
+            "name": data.name,
+            "role": "user",
+            "created_at": datetime.utcnow(),
+            "verified": False
+        })
+        
+        # Send verification email (not implemented here)
+        # await send_verification_email(user)
+        
+        return {"message": "Check your email to verify account"}
+        
+    except HTTPException:
+        raise
+    except Exception as err:
+        print(f"Registration error: {err}")
+        raise HTTPException(status_code=500, detail="Registration failed")
+
+# LOGIN
+@app.post('/api/login')
+@limiter.limit("5/15minutes")
+async def login(request: Request, data: LoginRequest, response: Response):
+    try:
+        import time
+        start = time.time()
+        
+        if not data.email or not data.password:
+            raise HTTPException(status_code=400, detail="Email and password required")
+        
+        user = await db.users.find_one({"email": data.email})
+        
+        valid = False
+        if user:
+            # Check if locked
+            if user.get("locked_until") and user["locked_until"] > datetime.utcnow():
+                minutes = int((user["locked_until"] - datetime.utcnow()).total_seconds() / 60)
+                raise HTTPException(
+                    status_code=429,
+                    detail=f"Account locked. Try again in {minutes} minutes"
+                )
+            
+            valid = bcrypt.checkpw(
+                data.password.encode(),
+                user["password_hash"].encode()
+            )
+        else:
+            # Fake comparison to prevent timing attacks
+            bcrypt.checkpw(
+                data.password.encode(),
+                b'$2b$12$fakehashtopreventtimingattack'
+            )
+        
+        # Ensure minimum response time (200ms)
+        elapsed = time.time() - start
+        if elapsed < 0.2:
+            import asyncio
+            await asyncio.sleep(0.2 - elapsed)
+        
+        if not valid:
+            # Increment failed attempts if user exists
+            if user:
+                failed_attempts = user.get("failed_login_attempts", 0) + 1
+                
+                if failed_attempts >= 5:
+                    await db.users.update_one(
+                        {"_id": user["_id"]},
+                        {
+                            "$set": {
+                                "failed_login_attempts": failed_attempts,
+                                "locked_until": datetime.utcnow() + timedelta(minutes=30)
+                            }
+                        }
+                    )
+                    
+                    raise HTTPException(
+                        status_code=429,
+                        detail="Too many failed attempts. Account locked for 30 minutes"
+                    )
+                
+                await db.users.update_one(
+                    {"_id": user["_id"]},
+                    {"$inc": {"failed_login_attempts": 1}}
+                )
+            
+            raise HTTPException(status_code=401, detail="Invalid credentials")
+        
+        # Reset failed attempts
+        await db.users.update_one(
+            {"_id": user["_id"]},
+            {"$set": {"failed_login_attempts": 0, "locked_until": None}}
+        )
+        
+        # Create session
+        session_id = await create_session(user, request)
+        
+        # Set cookie
+        response.set_cookie(
+            key="session_id",
+            value=session_id,
+            httponly=True,
+            secure=os.getenv("ENV") == "production",
+            samesite="strict",
+            max_age=SESSION_TTL
+        )
+        
+        return {
+            "message": "Logged in successfully",
+            "user": {
+                "id": str(user["_id"]),
+                "email": user["email"],
+                "name": user["name"],
+                "role": user["role"]
             }
-          );
-          
-          return res.status(429).json({
-            error: "Too many failed attempts. Account locked for 30 minutes"
-          });
         }
         
-        await db.users.update(
-          {_id: user._id},
-          {$inc: {failed_login_attempts: 1}}
-        );
-      }
-      
-      return res.status(401).json({error: "Invalid credentials"});
+    except HTTPException:
+        raise
+    except Exception as err:
+        print(f"Login error: {err}")
+        raise HTTPException(status_code=500, detail="Login failed")
+
+# GET CURRENT USER
+@app.get('/api/me')
+async def get_current_user(auth_data: dict = Depends(require_auth)):
+    session = auth_data["session"]
+    return {
+        "user_id": session["user_id"],
+        "email": session["email"],
+        "role": session["role"]
     }
-    
-    // Reset failed attempts
-    await db.users.update(
-      {_id: user._id},
-      {$set: {failed_login_attempts: 0, locked_until: null}}
-    );
-    
-    // Create session
-    const sessionId = await createSession(user, req);
-    
-    // Set cookie
-    res.cookie('session_id', sessionId, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
-      maxAge: SESSION_TTL * 1000
-    });
-    
-    res.json({
-      message: "Logged in successfully",
-      user: {
-        id: user.id,
-        email: user.email,
-        name: user.name,
-        role: user.role
-      }
-    });
-    
-  } catch (err) {
-    console.error('Login error:', err);
-    res.status(500).json({error: "Login failed"});
-  }
-});
 
-// GET CURRENT USER
-app.get('/api/me', requireAuth, (req, res) => {
-  res.json({
-    user_id: req.session.user_id,
-    email: req.session.email,
-    role: req.session.role
-  });
-});
-
-// LOGOUT
-app.post('/api/logout', requireAuth, async (req, res) => {
-  await redis.del(SESSION_PREFIX + req.sessionId);
-  
-  res.clearCookie('session_id', {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: 'strict'
-  });
-  
-  res.json({message: "Logged out successfully"});
-});
-
-// LOGOUT ALL DEVICES
-app.post('/api/logout-all', requireAuth, async (req, res) => {
-  const keys = await redis.keys(SESSION_PREFIX + '*');
-  
-  for (const key of keys) {
-    const data = await redis.get(key);
-    if (data) {
-      const session = JSON.parse(data);
-      if (session.user_id === req.session.user_id) {
-        await redis.del(key);
-      }
-    }
-  }
-  
-  res.clearCookie('session_id');
-  res.json({message: "Logged out from all devices"});
-});
-
-// ADMIN: VIEW ALL SESSIONS
-app.get('/api/admin/sessions',
-  requireAuth,
-  requireRole('admin'),
-  async (req, res) => {
-    const keys = await redis.keys(SESSION_PREFIX + '*');
-    const sessions = [];
+# LOGOUT
+@app.post('/api/logout')
+async def logout(response: Response, auth_data: dict = Depends(require_auth)):
+    await redis_client.delete(SESSION_PREFIX + auth_data["session_id"])
     
-    for (const key of keys) {
-      const data = await redis.get(key);
-      const ttl = await redis.ttl(key);
+    response.delete_cookie(
+        key="session_id",
+        httponly=True,
+        secure=os.getenv("ENV") == "production",
+        samesite="strict"
+    )
+    
+    return {"message": "Logged out successfully"}
+
+# LOGOUT ALL DEVICES
+@app.post('/api/logout-all')
+async def logout_all(response: Response, auth_data: dict = Depends(require_auth)):
+    session = auth_data["session"]
+    
+    # Get all session keys
+    keys = []
+    async for key in redis_client.scan_iter(match=SESSION_PREFIX + "*"):
+        keys.append(key)
+    
+    # Delete sessions for current user
+    for key in keys:
+        data = await redis_client.get(key)
+        if data:
+            session_data = json.loads(data)
+            if session_data["user_id"] == session["user_id"]:
+                await redis_client.delete(key)
+    
+    response.delete_cookie("session_id")
+    return {"message": "Logged out from all devices"}
+
+# ADMIN: VIEW ALL SESSIONS
+@app.get('/api/admin/sessions')
+async def get_all_sessions(auth_data: dict = Depends(require_role("admin"))):
+    sessions = []
+    
+    # Get all session keys
+    async for key in redis_client.scan_iter(match=SESSION_PREFIX + "*"):
+        data = await redis_client.get(key)
+        ttl = await redis_client.ttl(key)
+        
+        if data:
+            session_data = json.loads(data)
+            sessions.append({
+                "session_id": key.replace(SESSION_PREFIX, ""),
+                **session_data,
+                "expires_in": ttl
+            })
+    
+    return sessions
+
+# ADMIN: REVOKE SESSION
+@app.delete('/api/admin/sessions/{session_id}')
+async def revoke_session(
+    session_id: str,
+    auth_data: dict = Depends(require_role("admin"))
+):
+    await redis_client.delete(SESSION_PREFIX + session_id)
+    return {"message": "Session revoked"}
+
+# ========================================
+# Server Startup
+# ========================================
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
+
+# ========================================
+# Graceful Shutdown
+# ========================================
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    print("Shutting down, closing connections...")
+    await redis_client.close()
+```
       
       if (data) {
         sessions.push({
@@ -2447,23 +2536,27 @@ process.on('SIGTERM', async () => {
 **Pros**: Secure, revocable, updates in real-time
 **Cons**: Doesn't scale horizontally easily, needs Redis
 
-```javascript
-// Setup
-const Redis = require('ioredis');
-const redis = new Redis();
+```python
+import redis.asyncio as redis
+import secrets
+import json
 
-// Login
-const sessionId = crypto.randomBytes(32).toString('hex');
-await redis.setex(`sess:${sessionId}`, 3600, JSON.stringify(userData));
-res.cookie('session_id', sessionId, {httpOnly: true, secure: true});
+# Setup
+redis_client = redis.Redis(decode_responses=True)
 
-// Verify
-const data = await redis.get(`sess:${sessionId}`);
-if (!data) return unauthorized();
+# Login
+session_id = secrets.token_hex(32)
+await redis_client.setex(f"sess:{session_id}", 3600, json.dumps(user_data))
+response.set_cookie("session_id", session_id, httponly=True, secure=True)
 
-// Logout
-await redis.del(`sess:${sessionId}`);
-res.clearCookie('session_id');
+# Verify
+data = await redis_client.get(f"sess:{session_id}")
+if not data:
+    raise HTTPException(status_code=401)
+
+# Logout
+await redis_client.delete(f"sess:{session_id}")
+response.delete_cookie("session_id")
 ```
 
 ### JWT-Based (Stateless)
@@ -2473,28 +2566,30 @@ res.clearCookie('session_id');
 **Pros**: Scalable, no server storage, cross-domain
 **Cons**: Can't revoke, larger payload
 
-```javascript
-const jwt = require('jsonwebtoken');
+```python
+import jwt
+from datetime import datetime, timedelta
+from fastapi import HTTPException
+import os
 
-// Login
-const token = jwt.sign(
-  {sub: user.id, role: user.role},
-  process.env.JWT_SECRET,
-  {expiresIn: '1h'}
-);
-res.json({token});
+# Login
+token = jwt.encode(
+    {"sub": str(user.id), "role": user.role, "exp": datetime.utcnow() + timedelta(hours=1)},
+    os.getenv("JWT_SECRET"),
+    algorithm="HS256"
+)
+return {"token": token}
 
-// Verify
-try {
-  const decoded = jwt.verify(token, process.env.JWT_SECRET);
-  req.user = decoded;
-} catch (err) {
-  return unauthorized();
-}
+# Verify
+try:
+    decoded = jwt.decode(token, os.getenv("JWT_SECRET"), algorithms=["HS256"])
+    user = decoded
+except jwt.PyJWTError:
+    raise HTTPException(status_code=401)
 
-// "Logout" (client-side only)
-// Delete token from client storage
-localStorage.removeItem('token');
+# "Logout" (client-side only)
+# Delete token from client storage
+# localStorage.removeItem('token')
 ```
 
 ### API Keys
@@ -2504,17 +2599,22 @@ localStorage.removeItem('token');
 **Pros**: Simple, long-lived, revocable
 **Cons**: Must protect like passwords
 
-```javascript
-// Generate
-const apiKey = `sk_${crypto.randomBytes(32).toString('hex')}`;
-const hash = crypto.createHash('sha256').update(apiKey).digest('hex');
-await db.apiKeys.insert({key_hash: hash, user_id: user.id});
+```python
+import hashlib
+import secrets
+from fastapi import HTTPException
 
-// Verify
-const providedKey = req.headers.authorization.replace('Bearer ', '');
-const hash = crypto.createHash('sha256').update(providedKey).digest('hex');
-const keyData = await db.apiKeys.findOne({key_hash: hash});
-if (!keyData) return unauthorized();
+# Generate
+api_key = f"sk_{secrets.token_hex(32)}"
+hash_obj = hashlib.sha256(api_key.encode()).hexdigest()
+await db.api_keys.insert_one({"key_hash": hash_obj, "user_id": user.id})
+
+# Verify
+provided_key = request.headers.get("authorization", "").replace("Bearer ", "")
+hash_obj = hashlib.sha256(provided_key.encode()).hexdigest()
+key_data = await db.api_keys.find_one({"key_hash": hash_obj})
+if not key_data:
+    raise HTTPException(status_code=401)
 ```
 
 ## Security Checklist
@@ -2576,21 +2676,25 @@ General:
 **Attack**: Inject malicious script to steal cookies/tokens
 
 **Prevention**:
-```javascript
-// ✓ HttpOnly cookies (JavaScript can't access)
-res.cookie('session', id, {httpOnly: true});
+```python
+from fastapi import Response
+from starlette.middleware.base import BaseHTTPMiddleware
+import bleach
 
-// ✓ Content Security Policy
-app.use(helmet.contentSecurityPolicy({
-  directives: {
-    defaultSrc: ["'self'"],
-    scriptSrc: ["'self'"]
-  }
-}));
+# ✓ HttpOnly cookies (JavaScript can't access)
+response.set_cookie("session", session_id, httponly=True)
 
-// ✓ Sanitize user input
-const sanitize = require('sanitize-html');
-const clean = sanitize(userInput);
+# ✓ Content Security Policy (using middleware)
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        response = await call_next(request)
+        response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'"
+        return response
+
+app.add_middleware(SecurityHeadersMiddleware)
+
+# ✓ Sanitize user input
+clean_input = bleach.clean(user_input)
 ```
 
 ### CSRF (Cross-Site Request Forgery)
@@ -2598,18 +2702,27 @@ const clean = sanitize(userInput);
 **Attack**: Trick user into making unwanted request
 
 **Prevention**:
-```javascript
-// ✓ SameSite cookies
-res.cookie('session', id, {sameSite: 'strict'});
+```python
+from fastapi import Request, HTTPException, Response
+from fastapi_csrf_protect import CsrfProtect
+from pydantic import BaseModel
 
-// ✓ CSRF tokens
-const csrf = require('csurf');
-app.use(csrf({cookie: true}));
+class CsrfSettings(BaseModel):
+    secret_key: str = "your-secret-key"
 
-// ✓ Check Origin/Referer headers
-if (req.headers.origin !== 'https://yourapp.com') {
-  return forbidden();
-}
+# ✓ SameSite cookies
+response.set_cookie("session", session_id, samesite="strict")
+
+# ✓ CSRF tokens
+@CsrfProtect.load_config
+def get_csrf_config():
+    return CsrfSettings()
+
+csrf_protect = CsrfProtect()
+
+# ✓ Check Origin/Referer headers
+if request.headers.get("origin") != "https://yourapp.com":
+    raise HTTPException(status_code=403, detail="Forbidden")
 ```
 
 ### SQL Injection
@@ -2617,16 +2730,27 @@ if (req.headers.origin !== 'https://yourapp.com') {
 **Attack**: Inject SQL through user input
 
 **Prevention**:
-```javascript
-// ✓ Use parameterized queries
-const query = 'SELECT * FROM users WHERE email = ?';
-db.query(query, [email]);
+```python
+from motor.motor_asyncio import AsyncIOMotorClient
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
 
-// ✓ Use ORM (Sequelize, TypeORM)
-const user = await User.findOne({where: {email}});
+# ✓ Use parameterized queries (with SQLAlchemy)
+async def get_user_by_email(session: AsyncSession, email: str):
+    query = text("SELECT * FROM users WHERE email = :email")
+    result = await session.execute(query, {"email": email})
+    return result.fetchone()
 
-// ❌ NEVER concatenate
-const query = `SELECT * FROM users WHERE email = '${email}'`; // DANGER!
+# ✓ Use ORM (SQLAlchemy)
+from sqlalchemy.future import select
+
+user = await session.execute(select(User).where(User.email == email))
+
+# ✓ Use MongoDB (Motor - async MongoDB driver)
+user = await db.users.find_one({"email": email})
+
+# ❌ NEVER concatenate
+# query = f"SELECT * FROM users WHERE email = '{email}'"  # DANGER!
 ```
 
 ### Brute Force
@@ -2634,23 +2758,27 @@ const query = `SELECT * FROM users WHERE email = '${email}'`; // DANGER!
 **Attack**: Try many passwords
 
 **Prevention**:
-```javascript
-// ✓ Rate limiting
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 5
-});
-app.post('/login', limiter, ...);
+```python
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+from fastapi import Request
+from datetime import datetime, timedelta
 
-// ✓ Account lockout
-if (failedAttempts >= 5) {
-  user.locked_until = new Date(Date.now() + 30 * 60 * 1000);
-}
+# ✓ Rate limiting
+limiter = Limiter(key_func=get_remote_address)
 
-// ✓ CAPTCHA after failures
-if (failedAttempts >= 3) {
-  requireCaptcha = true;
-}
+@app.post('/login')
+@limiter.limit("5/15minutes")
+async def login(request: Request, ...):
+    pass
+
+# ✓ Account lockout
+if failed_attempts >= 5:
+    user.locked_until = datetime.utcnow() + timedelta(minutes=30)
+
+# ✓ CAPTCHA after failures
+if failed_attempts >= 3:
+    require_captcha = True
 ```
 
 ## Troubleshooting Guide
@@ -2664,18 +2792,22 @@ if (failedAttempts >= 3) {
 - HTTPS/Secure mismatch
 
 **Debug**:
-```javascript
-// Check cookie in response
-console.log('Response headers:', res.headers['set-cookie']);
+```python
+from fastapi import Response, Request
 
-// Check cookie in request
-console.log('Request cookies:', req.cookies);
+# Check cookie in response
+print(f"Response headers: {response.headers}")
 
-// Verify domain
-res.cookie('session', id, {
-  domain: '.example.com',  // Works for all subdomains
-  sameSite: 'lax'          // Try lax instead of strict
-});
+# Check cookie in request
+print(f"Request cookies: {request.cookies}")
+
+# Verify domain
+response.set_cookie(
+    "session",
+    session_id,
+    domain=".example.com",  # Works for all subdomains
+    samesite="lax"          # Try lax instead of strict
+)
 ```
 
 ### JWT "Invalid signature"
@@ -2686,16 +2818,19 @@ res.cookie('session', id, {
 - Token format invalid
 
 **Debug**:
-```javascript
-// Verify secret
-console.log('Using secret:', process.env.JWT_SECRET);
+```python
+import jwt
+import os
 
-// Decode without verifying (see payload)
-const decoded = jwt.decode(token);
-console.log('Token payload:', decoded);
+# Verify secret
+print(f"Using secret: {os.getenv('JWT_SECRET')}")
 
-// Check algorithm
-const decoded = jwt.verify(token, secret, {algorithms: ['HS256']});
+# Decode without verifying (see payload)
+decoded = jwt.decode(token, options={"verify_signature": False})
+print(f"Token payload: {decoded}")
+
+# Check algorithm
+decoded = jwt.decode(token, secret, algorithms=["HS256"])
 ```
 
 ### CORS errors
@@ -2706,22 +2841,30 @@ const decoded = jwt.verify(token, secret, {algorithms: ['HS256']});
 - Wrong origin
 
 **Fix**:
-```javascript
-const cors = require('cors');
+```python
+from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
 
-app.use(cors({
-  origin: 'https://yourfrontend.com',
-  credentials: true  // Allow cookies
-}));
+# Using built-in CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://yourfrontend.com"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-// Or manually
-app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', 'https://yourfrontend.com');
-  res.header('Access-Control-Allow-Credentials', 'true');
-  res.header('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE');
-  res.header('Access-Control-Allow-Headers', 'Content-Type,Authorization');
-  next();
-});
+# Or manually
+class CORSHeaderMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        response = await call_next(request)
+        response.headers["Access-Control-Allow-Origin"] = "https://yourfrontend.com"
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+        response.headers["Access-Control-Allow-Methods"] = "GET,POST,PUT,DELETE"
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type,Authorization"
+        return response
+
+app.add_middleware(CORSHeaderMiddleware)
 ```
 
 ### Redis connection failed
@@ -2732,28 +2875,34 @@ app.use((req, res, next) => {
 - Network issue
 
 **Fix**:
-```javascript
-const redis = new Redis({
-  host: 'localhost',
-  port: 6379,
-  retryStrategy(times) {
-    console.log(`Redis retry attempt ${times}`);
-    return Math.min(times * 50, 2000);
-  }
-});
+```python
+import redis.asyncio as redis
+import asyncio
 
-redis.on('error', (err) => {
-  console.error('Redis error:', err);
-});
+# Setup with retry
+redis_client = redis.Redis(
+    host="localhost",
+    port=6379,
+    retry_on_timeout=True,
+    socket_connect_timeout=5,
+    decode_responses=True
+)
 
-redis.on('connect', () => {
-  console.log('Redis connected');
-});
+# Test connection
+try:
+    result = await redis_client.ping()
+    print(f"Redis ping: {result}")  # Should be True
+except redis.ConnectionError as err:
+    print(f"Redis error: {err}")
 
-// Test connection
-redis.ping((err, result) => {
-  console.log('Redis ping:', result); // Should be "PONG"
-});
+# Connection event handling
+@app.on_event("startup")
+async def startup_event():
+    try:
+        await redis_client.ping()
+        print("Redis connected")
+    except Exception as err:
+        print(f"Redis connection failed: {err}")
 ```
 
 ---
@@ -2796,8 +2945,8 @@ redis.ping((err, result) => {
 - JWT: https://jwt.io/
 
 **Libraries**:
+- Python: python-jose, PyJWT, passlib, bcrypt, python-multipart, slowapi, fastapi-csrf-protect
 - Node.js: passport.js, jose, bcrypt
-- Python: authlib, PyJWT, passlib
 - Go: golang-jwt, oauth2
 
 **Auth Providers**:

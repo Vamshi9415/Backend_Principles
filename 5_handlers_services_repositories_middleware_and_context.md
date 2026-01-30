@@ -141,40 +141,48 @@ This is also known as the **three-tier architecture** or **layered architecture*
 
 #### ❌ Without the Pattern
 
-```javascript
-// Everything in one function - NOT RECOMMENDED
-app.post('/api/books', async (req, res) => {
-  // HTTP parsing
-  const { title, author, isbn } = req.body;
-  
-  // Validation
-  if (!title || title.length < 3) {
-    return res.status(400).json({ error: 'Invalid title' });
-  }
-  
-  // Business logic
-  const book = {
-    id: generateId(),
-    title: title.trim(),
-    author: author.trim(),
-    isbn,
-    createdAt: new Date()
-  };
-  
-  // Database operation
-  const sql = 'INSERT INTO books (id, title, author, isbn, created_at) VALUES (?, ?, ?, ?, ?)';
-  await db.query(sql, [book.id, book.title, book.author, book.isbn, book.createdAt]);
-  
-  // Another database operation
-  const userSql = 'UPDATE users SET book_count = book_count + 1 WHERE id = ?';
-  await db.query(userSql, [req.user.id]);
-  
-  // Email sending
-  await sendEmail(req.user.email, 'Book created!');
-  
-  // HTTP response
-  res.status(201).json(book);
-});
+```python
+# Everything in one function - NOT RECOMMENDED
+from fastapi import FastAPI, HTTPException, Request
+from datetime import datetime
+import uuid
+
+app = FastAPI()
+
+@app.post("/api/books")
+async def create_book(request: Request):
+    # HTTP parsing
+    data = await request.json()
+    title = data.get('title')
+    author = data.get('author')
+    isbn = data.get('isbn')
+    
+    # Validation
+    if not title or len(title) < 3:
+        raise HTTPException(status_code=400, detail="Invalid title")
+    
+    # Business logic
+    book = {
+        "id": str(uuid.uuid4()),
+        "title": title.strip(),
+        "author": author.strip(),
+        "isbn": isbn,
+        "created_at": datetime.now()
+    }
+    
+    # Database operation
+    sql = 'INSERT INTO books (id, title, author, isbn, created_at) VALUES (?, ?, ?, ?, ?)'
+    await db.execute(sql, [book["id"], book["title"], book["author"], book["isbn"], book["created_at"]])
+    
+    # Another database operation
+    user_sql = 'UPDATE users SET book_count = book_count + 1 WHERE id = ?'
+    await db.execute(user_sql, [request.state.user_id])
+    
+    # Email sending
+    await send_email(request.state.user_email, 'Book created!')
+    
+    # HTTP response
+    return book
 ```
 
 **Problems:**
@@ -186,41 +194,58 @@ app.post('/api/books', async (req, res) => {
 
 #### ✅ With the Pattern
 
-```javascript
-// HANDLER - handles HTTP concerns
-async function createBookHandler(req, res) {
-  const { title, author, isbn } = req.body;
-  const userId = req.context.userId; // from auth middleware
-  
-  const book = await bookService.createBook({ title, author, isbn, userId });
-  
-  res.status(201).json(book);
-}
+```python
+# HANDLER - handles HTTP concerns
+from fastapi import APIRouter, Request, status
+from pydantic import BaseModel
 
-// SERVICE - business logic
-async function createBook({ title, author, isbn, userId }) {
-  // Business logic
-  const book = {
-    id: generateId(),
-    title: title.trim(),
-    author: author.trim(),
-    isbn,
-    createdAt: new Date()
-  };
-  
-  // Orchestrate multiple operations
-  await bookRepository.insert(book);
-  await userRepository.incrementBookCount(userId);
-  await emailService.sendBookCreatedEmail(userId);
-  
-  return book;
-}
+router = APIRouter()
 
-// REPOSITORY - database operations
-async function insertBook(book) {
-  const sql = 'INSERT INTO books (id, title, author, isbn, created_at) VALUES (?, ?, ?, ?, ?)';
-  return db.query(sql, [book.id, book.title, book.author, book.isbn, book.createdAt]);
-}
+class CreateBookRequest(BaseModel):
+    title: str
+    author: str
+    isbn: str | None = None
+
+@router.post("/api/books", status_code=status.HTTP_201_CREATED)
+async def create_book_handler(book_data: CreateBookRequest, request: Request):
+    user_id = request.state.user_id  # from auth middleware
+    
+    book = await book_service.create_book(
+        title=book_data.title,
+        author=book_data.author,
+        isbn=book_data.isbn,
+        user_id=user_id
+    )
+    
+    return book
+
+# SERVICE - business logic
+from datetime import datetime
+import uuid
+
+class BookService:
+    async def create_book(self, title: str, author: str, isbn: str | None, user_id: str):
+        # Business logic
+        book = {
+            "id": str(uuid.uuid4()),
+            "title": title.strip(),
+            "author": author.strip(),
+            "isbn": isbn,
+            "created_at": datetime.now()
+        }
+        
+        # Orchestrate multiple operations
+        await book_repository.insert(book)
+        await user_repository.increment_book_count(user_id)
+        await email_service.send_book_created_email(user_id)
+        
+        return book
+
+# REPOSITORY - database operations
+class BookRepository:
+    async def insert(self, book: dict):
+        sql = 'INSERT INTO books (id, title, author, isbn, created_at) VALUES (?, ?, ?, ?, ?)'
+        return await db.execute(sql, [book["id"], book["title"], book["author"], book["isbn"], book["created_at"]])
 ```
 
 **Benefits:**
@@ -256,173 +281,226 @@ A handler (also called controller) is a function that:
 
 #### What a Handler Receives
 
-Every handler typically receives two (or three) objects:
+Every handler typically receives request object and any dependencies:
 
-```javascript
-// Node.js / Express
+```python
+# Python (FastAPI)
+from fastapi import Request, Depends
+from pydantic import BaseModel
+
+class BookRequest(BaseModel):
+    title: str
+    author: str
+
+@app.post("/api/books")
+async def handler(book: BookRequest, request: Request):
+    # book: validated request data (Pydantic model)
+    # request: request object with headers, state, etc.
+    return {"message": "Book created"}
+
+# Go (using Gin framework)
+func handler(c *gin.Context) {
+  // c contains both request and response
+}
+
+# Node.js / Express
 function handler(req, res, next) {
   // req: request object
   // res: response object
   // next: pass to next middleware (optional)
 }
-
-// Go (using Gin framework)
-func handler(c *gin.Context) {
-  // c contains both request and response
-}
-
-// Python (FastAPI)
-def handler(request: Request):
-  # request object
-  return response
 ```
 
 #### Handler Examples
 
 **Example 1: GET Request - Fetch Books**
 
-```javascript
-// GET /api/books?sort=name&limit=10
-async function getBooksHandler(req, res) {
-  try {
-    // 1. Extract data from request
-    const { sort = 'date', limit = 10, offset = 0 } = req.query;
-    
-    // 2. Validation (basic - more complex validation can use libraries)
-    if (limit < 1 || limit > 100) {
-      return res.status(400).json({ error: 'Limit must be between 1 and 100' });
-    }
-    
-    // 3. Transformation - convert strings to numbers
-    const parsedLimit = parseInt(limit);
-    const parsedOffset = parseInt(offset);
-    
-    // 4. Call service layer
-    const books = await bookService.getBooks({
-      sort,
-      limit: parsedLimit,
-      offset: parsedOffset
-    });
-    
-    // 5. Send response
-    res.status(200).json({
-      data: books,
-      pagination: {
-        limit: parsedLimit,
-        offset: parsedOffset
-      }
-    });
-    
-  } catch (error) {
-    // 6. Error handling
-    console.error('Error in getBooksHandler:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-}
+```python
+# GET /api/books?sort=name&limit=10
+from fastapi import APIRouter, HTTPException, Query
+from typing import Optional
+
+router = APIRouter()
+
+@router.get("/api/books")
+async def get_books_handler(
+    sort: str = Query("date", description="Sort by field"),
+    limit: int = Query(10, ge=1, le=100, description="Number of books to return"),
+    offset: int = Query(0, ge=0, description="Offset for pagination")
+):
+    try:
+        # 1. Extract data from query params (done by FastAPI)
+        
+        # 2. Validation (FastAPI validates via Query parameters)
+        # Limit is already validated to be between 1 and 100
+        
+        # 3. Transformation is automatic with type hints
+        # FastAPI converts strings to integers automatically
+        
+        # 4. Call service layer
+        books = await book_service.get_books(
+            sort=sort,
+            limit=limit,
+            offset=offset
+        )
+        
+        # 5. Send response
+        return {
+            "data": books,
+            "pagination": {
+                "limit": limit,
+                "offset": offset
+            }
+        }
+        
+    except Exception as error:
+        # 6. Error handling
+        print(f"Error in get_books_handler: {error}")
+        raise HTTPException(status_code=500, detail="Internal server error")
 ```
 
 **Example 2: POST Request - Create Book**
 
-```javascript
-// POST /api/books
-async function createBookHandler(req, res) {
-  try {
-    // 1. Extract data from request body
-    const { title, author, isbn, publishedYear } = req.body;
+```python
+# POST /api/books
+from fastapi import APIRouter, HTTPException, Request, status
+from pydantic import BaseModel, Field, validator
+from typing import Optional
+
+router = APIRouter()
+
+class CreateBookRequest(BaseModel):
+    title: str = Field(..., min_length=3)
+    author: str = Field(..., min_length=2)
+    isbn: Optional[str] = None
+    published_year: Optional[int] = None
     
-    // 2. Get authenticated user from context (set by auth middleware)
-    const userId = req.context.userId;
-    
-    // 3. Validation
-    if (!title || title.trim().length < 3) {
-      return res.status(400).json({ 
-        error: 'Title is required and must be at least 3 characters' 
-      });
-    }
-    
-    if (!author || author.trim().length < 2) {
-      return res.status(400).json({ 
-        error: 'Author is required and must be at least 2 characters' 
-      });
-    }
-    
-    // 4. Transformation
-    const bookData = {
-      title: title.trim(),
-      author: author.trim(),
-      isbn: isbn?.trim(),
-      publishedYear: publishedYear ? parseInt(publishedYear) : null,
-      userId
-    };
-    
-    // 5. Call service layer
-    const book = await bookService.createBook(bookData);
-    
-    // 6. Send response (201 Created for successful POST)
-    res.status(201).json(book);
-    
-  } catch (error) {
-    console.error('Error in createBookHandler:', error);
-    
-    // More specific error handling
-    if (error.code === 'DUPLICATE_ISBN') {
-      return res.status(409).json({ error: 'Book with this ISBN already exists' });
-    }
-    
-    res.status(500).json({ error: 'Internal server error' });
-  }
-}
+    @validator('title', 'author')
+    def strip_whitespace(cls, v):
+        return v.strip() if v else v
+
+@router.post("/api/books", status_code=status.HTTP_201_CREATED)
+async def create_book_handler(book_data: CreateBookRequest, request: Request):
+    try:
+        # 1. Extract data from request body (done by Pydantic)
+        # 2. Get authenticated user from state (set by auth middleware)
+        user_id = request.state.user_id
+        
+        # 3. Validation (done by Pydantic model)
+        # Title and author are already validated
+        
+        # 4. Transformation (done by Pydantic validators)
+        # Data is already stripped and transformed
+        
+        # 5. Call service layer
+        book = await book_service.create_book(
+            title=book_data.title,
+            author=book_data.author,
+            isbn=book_data.isbn,
+            published_year=book_data.published_year,
+            user_id=user_id
+        )
+        
+        # 6. Send response (201 Created for successful POST)
+        return book
+        
+    except ValueError as error:
+        print(f"Error in create_book_handler: {error}")
+        
+        # More specific error handling
+        if "DUPLICATE_ISBN" in str(error):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Book with this ISBN already exists"
+            )
+        
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error"
+        )
 ```
 
 **Example 3: DELETE Request**
 
-```javascript
-// DELETE /api/books/:id
-async function deleteBookHandler(req, res) {
-  try {
-    // 1. Extract path parameter
-    const { id } = req.params;
-    
-    // 2. Get user from context
-    const userId = req.context.userId;
-    const userRole = req.context.role;
-    
-    // 3. Validation
-    if (!id || !isValidUUID(id)) {
-      return res.status(400).json({ error: 'Invalid book ID' });
-    }
-    
-    // 4. Call service layer (service handles permission checks)
-    await bookService.deleteBook({ id, userId, userRole });
-    
-    // 5. Send response (204 No Content for successful DELETE)
-    res.status(204).send();
-    
-  } catch (error) {
-    if (error.code === 'NOT_FOUND') {
-      return res.status(404).json({ error: 'Book not found' });
-    }
-    
-    if (error.code === 'FORBIDDEN') {
-      return res.status(403).json({ error: 'You do not have permission to delete this book' });
-    }
-    
-    res.status(500).json({ error: 'Internal server error' });
-  }
-}
+```python
+# DELETE /api/books/:id
+from fastapi import APIRouter, HTTPException, Request, status, Path
+import uuid
+
+router = APIRouter()
+
+def is_valid_uuid(value: str) -> bool:
+    try:
+        uuid.UUID(value)
+        return True
+    except ValueError:
+        return False
+
+@router.delete("/api/books/{book_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_book_handler(book_id: str = Path(...), request: Request = None):
+    try:
+        # 1. Extract path parameter (done by FastAPI)
+        # 2. Get user from state
+        user_id = request.state.user_id
+        user_role = request.state.role
+        
+        # 3. Validation
+        if not book_id or not is_valid_uuid(book_id):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid book ID"
+            )
+        
+        # 4. Call service layer (service handles permission checks)
+        await book_service.delete_book(
+            book_id=book_id,
+            user_id=user_id,
+            user_role=user_role
+        )
+        
+        # 5. Send response (204 No Content for successful DELETE)
+        return None  # FastAPI returns 204 automatically
+        
+    except ValueError as error:
+        error_msg = str(error)
+        if "NOT_FOUND" in error_msg:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Book not found"
+            )
+        
+        if "FORBIDDEN" in error_msg:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have permission to delete this book"
+            )
+        
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error"
+        )
 ```
 
 #### Deserialization in Different Languages
 
-**JavaScript/Node.js:**
-```javascript
-// Usually handled by middleware (express.json())
-app.use(express.json());
+**Python (FastAPI):**
+```python
+from pydantic import BaseModel
+from fastapi import FastAPI
 
-// In handler, you get parsed object directly
-function handler(req, res) {
-  const { name, age } = req.body; // Already a JS object
-}
+app = FastAPI()
+
+class CreateBookRequest(BaseModel):
+    title: str
+    author: str
+    isbn: str | None = None
+
+@app.post("/api/books")
+async def create_book(book: CreateBookRequest):
+    # FastAPI automatically deserializes and validates
+    # book is a Python object with type checking
+    # Access fields like: book.title, book.author
+    pass
 ```
 
 **Go:**
@@ -446,20 +524,15 @@ func createBookHandler(c *gin.Context) {
 }
 ```
 
-**Python (FastAPI):**
-```python
-from pydantic import BaseModel
+**JavaScript/Node.js:**
+```javascript
+// Usually handled by middleware (express.json())
+app.use(express.json());
 
-class CreateBookRequest(BaseModel):
-    title: str
-    author: str
-    isbn: Optional[str] = None
-
-@app.post("/api/books")
-async def create_book(book: CreateBookRequest):
-    # FastAPI automatically deserializes and validates
-    # book is a Python object with type checking
-    pass
+// In handler, you get parsed object directly
+function handler(req, res) {
+  const { name, age } = req.body; // Already a JS object
+}
 ```
 
 #### When to Use Handlers
@@ -469,35 +542,38 @@ async def create_book(book: CreateBookRequest):
 #### Common Mistakes in Handlers
 
 ❌ **Putting business logic in handlers**
-```javascript
-// WRONG - business logic in handler
-async function createBookHandler(req, res) {
-  const book = { ...req.body, id: generateId() };
-  
-  // This business logic should be in service layer
-  if (book.publishedYear > new Date().getFullYear()) {
-    return res.status(400).json({ error: 'Future publication date not allowed' });
-  }
-  
-  await db.query('INSERT INTO books ...', book);
-  res.status(201).json(book);
-}
+```python
+# WRONG - business logic in handler
+from datetime import datetime
+
+@app.post("/api/books")
+async def create_book_handler(book_data: CreateBookRequest):
+    book = {**book_data.dict(), "id": str(uuid.uuid4())}
+    
+    # This business logic should be in service layer
+    if book.get("published_year", 0) > datetime.now().year:
+        raise HTTPException(
+            status_code=400,
+            detail="Future publication date not allowed"
+        )
+    
+    await db.execute('INSERT INTO books ...', book)
+    return book
 ```
 
 ✅ **Correct - delegate to service layer**
-```javascript
-async function createBookHandler(req, res) {
-  const book = await bookService.createBook(req.body);
-  res.status(201).json(book);
-}
+```python
+@app.post("/api/books")
+async def create_book_handler(book_data: CreateBookRequest):
+    book = await book_service.create_book(book_data.dict())
+    return book
 
-// Business logic in service
-async function createBook(data) {
-  if (data.publishedYear > new Date().getFullYear()) {
-    throw new ValidationError('Future publication date not allowed');
-  }
-  // ... rest of logic
-}
+# Business logic in service
+class BookService:
+    async def create_book(self, data: dict):
+        if data.get("published_year", 0) > datetime.now().year:
+            raise ValueError("Future publication date not allowed")
+        # ... rest of logic
 ```
 
 ---
@@ -528,200 +604,260 @@ A service is a module/class/set of functions that contains your **business logic
 
 **Example 1: Simple Service - Get Books**
 
-```javascript
-// bookService.js
+```python
+# book_service.py
+from datetime import datetime
+from typing import List, Dict
 
-async function getBooks({ sort = 'date', limit = 10, offset = 0 }) {
-  // 1. Apply defaults (can also be done in handler)
-  const validSort = ['date', 'name'].includes(sort) ? sort : 'date';
-  
-  // 2. Call repository
-  const books = await bookRepository.findAll({
-    sortBy: validSort,
-    limit,
-    offset
-  });
-  
-  // 3. Business logic - maybe filter or transform
-  // For example, hide books that are not published yet
-  const publishedBooks = books.filter(book => {
-    return book.publishedDate <= new Date();
-  });
-  
-  return publishedBooks;
-}
+class BookService:
+    def __init__(self, book_repository):
+        self.book_repository = book_repository
+    
+    async def get_books(
+        self,
+        sort: str = "date",
+        limit: int = 10,
+        offset: int = 0
+    ) -> List[Dict]:
+        # 1. Apply defaults and validation
+        valid_sort = sort if sort in ["date", "name"] else "date"
+        
+        # 2. Call repository
+        books = await self.book_repository.find_all(
+            sort_by=valid_sort,
+            limit=limit,
+            offset=offset
+        )
+        
+        # 3. Business logic - maybe filter or transform
+        # For example, hide books that are not published yet
+        published_books = [
+            book for book in books
+            if book.get("published_date") and book["published_date"] <= datetime.now()
+        ]
+        
+        return published_books
 ```
 
 **Example 2: Complex Service - Create Book**
 
-```javascript
-async function createBook({ title, author, isbn, publishedYear, userId }) {
-  // 1. Business validation
-  if (publishedYear > new Date().getFullYear()) {
-    throw new BusinessError('Cannot create book with future publication year', 'INVALID_YEAR');
-  }
-  
-  // 2. Check for duplicates
-  if (isbn) {
-    const existing = await bookRepository.findByISBN(isbn);
-    if (existing) {
-      throw new BusinessError('Book with this ISBN already exists', 'DUPLICATE_ISBN');
-    }
-  }
-  
-  // 3. Prepare data
-  const book = {
-    id: generateUUID(),
-    title: title.trim(),
-    author: author.trim(),
-    isbn,
-    publishedYear,
-    userId,
-    createdAt: new Date(),
-    updatedAt: new Date()
-  };
-  
-  // 4. Orchestrate multiple operations
-  // Insert book
-  await bookRepository.insert(book);
-  
-  // Update user's book count
-  await userRepository.incrementBookCount(userId);
-  
-  // Add to search index (external service)
-  await searchService.indexBook(book);
-  
-  // Send notification email
-  await emailService.sendBookCreatedNotification(userId, book);
-  
-  // 5. Return data
-  return book;
-}
+```python
+from datetime import datetime
+import uuid
+from typing import Optional
+
+class BusinessError(Exception):
+    def __init__(self, message: str, code: str):
+        self.message = message
+        self.code = code
+        super().__init__(self.message)
+
+class BookService:
+    def __init__(self, book_repository, user_repository, search_service, email_service):
+        self.book_repository = book_repository
+        self.user_repository = user_repository
+        self.search_service = search_service
+        self.email_service = email_service
+    
+    async def create_book(
+        self,
+        title: str,
+        author: str,
+        isbn: Optional[str],
+        published_year: Optional[int],
+        user_id: str
+    ) -> dict:
+        # 1. Business validation
+        if published_year and published_year > datetime.now().year:
+            raise BusinessError(
+                "Cannot create book with future publication year",
+                "INVALID_YEAR"
+            )
+        
+        # 2. Check for duplicates
+        if isbn:
+            existing = await self.book_repository.find_by_isbn(isbn)
+            if existing:
+                raise BusinessError(
+                    "Book with this ISBN already exists",
+                    "DUPLICATE_ISBN"
+                )
+        
+        # 3. Prepare data
+        book = {
+            "id": str(uuid.uuid4()),
+            "title": title.strip(),
+            "author": author.strip(),
+            "isbn": isbn,
+            "published_year": published_year,
+            "user_id": user_id,
+            "created_at": datetime.now(),
+            "updated_at": datetime.now()
+        }
+        
+        # 4. Orchestrate multiple operations
+        # Insert book
+        await self.book_repository.insert(book)
+        
+        # Update user's book count
+        await self.user_repository.increment_book_count(user_id)
+        
+        # Add to search index (external service)
+        await self.search_service.index_book(book)
+        
+        # Send notification email
+        await self.email_service.send_book_created_notification(user_id, book)
+        
+        # 5. Return data
+        return book
 ```
 
 **Example 3: Service with Transaction**
 
-```javascript
-async function transferBookOwnership({ bookId, fromUserId, toUserId, requesterId }) {
-  // 1. Permission check
-  if (requesterId !== fromUserId) {
-    throw new ForbiddenError('You can only transfer your own books');
-  }
-  
-  // 2. Verify book exists and belongs to user
-  const book = await bookRepository.findById(bookId);
-  if (!book) {
-    throw new NotFoundError('Book not found');
-  }
-  
-  if (book.userId !== fromUserId) {
-    throw new ForbiddenError('This book does not belong to you');
-  }
-  
-  // 3. Verify recipient exists
-  const recipient = await userRepository.findById(toUserId);
-  if (!recipient) {
-    throw new NotFoundError('Recipient user not found');
-  }
-  
-  // 4. Perform transfer in transaction (all or nothing)
-  await database.transaction(async (trx) => {
-    // Update book ownership
-    await bookRepository.updateOwner(bookId, toUserId, trx);
+```python
+from typing import Dict
+
+class ForbiddenError(Exception):
+    pass
+
+class NotFoundError(Exception):
+    pass
+
+class BookService:
+    def __init__(self, database, book_repository, user_repository, transfer_log_repository, email_service):
+        self.database = database
+        self.book_repository = book_repository
+        self.user_repository = user_repository
+        self.transfer_log_repository = transfer_log_repository
+        self.email_service = email_service
     
-    // Decrement old owner's count
-    await userRepository.decrementBookCount(fromUserId, trx);
-    
-    // Increment new owner's count
-    await userRepository.incrementBookCount(toUserId, trx);
-    
-    // Create transfer log
-    await transferLogRepository.create({
-      bookId,
-      fromUserId,
-      toUserId,
-      timestamp: new Date()
-    }, trx);
-  });
-  
-  // 5. Send notifications
-  await emailService.sendTransferNotification(fromUserId, toUserId, book);
-  
-  return { success: true };
-}
+    async def transfer_book_ownership(
+        self,
+        book_id: str,
+        from_user_id: str,
+        to_user_id: str,
+        requester_id: str
+    ) -> Dict[str, bool]:
+        # 1. Permission check
+        if requester_id != from_user_id:
+            raise ForbiddenError('You can only transfer your own books')
+        
+        # 2. Verify book exists and belongs to user
+        book = await self.book_repository.find_by_id(book_id)
+        if not book:
+            raise NotFoundError('Book not found')
+        
+        if book["user_id"] != from_user_id:
+            raise ForbiddenError('This book does not belong to you')
+        
+        # 3. Verify recipient exists
+        recipient = await self.user_repository.find_by_id(to_user_id)
+        if not recipient:
+            raise NotFoundError('Recipient user not found')
+        
+        # 4. Perform transfer in transaction (all or nothing)
+        async with self.database.transaction() as trx:
+            # Update book ownership
+            await self.book_repository.update_owner(book_id, to_user_id, trx)
+            
+            # Decrement old owner's count
+            await self.user_repository.decrement_book_count(from_user_id, trx)
+            
+            # Increment new owner's count
+            await self.user_repository.increment_book_count(to_user_id, trx)
+            
+            # Create transfer log
+            await self.transfer_log_repository.create({
+                "book_id": book_id,
+                "from_user_id": from_user_id,
+                "to_user_id": to_user_id,
+                "timestamp": datetime.now()
+            }, trx)
+        
+        # 5. Send notifications
+        await self.email_service.send_transfer_notification(from_user_id, to_user_id, book)
+        
+        return {"success": True}
 ```
 
 **Example 4: Service Without Database Calls**
 
-```javascript
-// Not all services need to call repositories
-async function sendBookRecommendations(userId) {
-  // 1. Get user preferences
-  const user = await userRepository.findById(userId);
-  
-  // 2. Call external recommendation API
-  const recommendations = await externalAPI.getRecommendations({
-    genres: user.favoriteGenres,
-    authors: user.favoriteAuthors
-  });
-  
-  // 3. Send email (no database operation)
-  await emailService.sendRecommendationEmail(user.email, recommendations);
-  
-  return { sent: true, count: recommendations.length };
-}
+```python
+# Not all services need to call repositories
+class RecommendationService:
+    def __init__(self, user_repository, external_api, email_service):
+        self.user_repository = user_repository
+        self.external_api = external_api
+        self.email_service = email_service
+    
+    async def send_book_recommendations(self, user_id: str) -> Dict[str, any]:
+        # 1. Get user preferences
+        user = await self.user_repository.find_by_id(user_id)
+        
+        # 2. Call external recommendation API
+        recommendations = await self.external_api.get_recommendations(
+            genres=user["favorite_genres"],
+            authors=user["favorite_authors"]
+        )
+        
+        # 3. Send email (no database operation)
+        await self.email_service.send_recommendation_email(
+            user["email"],
+            recommendations
+        )
+        
+        return {"sent": True, "count": len(recommendations)}
 ```
 
 #### Service Pattern Guidelines
 
 **Single Responsibility:**
-```javascript
-// GOOD - Each service method does one thing
-bookService.createBook(data)
-bookService.updateBook(id, data)
-bookService.deleteBook(id)
-bookService.getBook(id)
-bookService.getAllBooks(filters)
+```python
+# GOOD - Each service method does one thing
+class BookService:
+    async def create_book(self, data): ...
+    async def update_book(self, book_id, data): ...
+    async def delete_book(self, book_id): ...
+    async def get_book(self, book_id): ...
+    async def get_all_books(self, filters): ...
 
-// BAD - Too much in one method
-bookService.handleBookOperation(action, data)
+# BAD - Too much in one method
+class BookService:
+    async def handle_book_operation(self, action, data): ...
 ```
 
 **No HTTP Awareness:**
-```javascript
-// WRONG - Service should not know about HTTP
-async function createBook(req, res) {
-  // ...
-  res.status(201).json(book); // ❌ Service shouldn't handle responses
-}
+```python
+# WRONG - Service should not know about HTTP
+from fastapi import Response
 
-// CORRECT - Service just returns data or throws errors
-async function createBook(data) {
-  // ...
-  return book; // ✅ Handler decides what HTTP response to send
-}
+async def create_book(self, response: Response, data: dict):
+    # ...
+    response.status_code = 201  # ❌ Service shouldn't handle responses
+    return book
+
+# CORRECT - Service just returns data or raises errors
+async def create_book(self, data: dict):
+    # ...
+    return book  # ✅ Handler decides what HTTP response to send
 ```
 
 **Meaningful Errors:**
-```javascript
-class BusinessError extends Error {
-  constructor(message, code) {
-    super(message);
-    this.code = code;
-    this.isBusinessError = true;
-  }
-}
+```python
+class BusinessError(Exception):
+    def __init__(self, message: str, code: str):
+        self.message = message
+        self.code = code
+        super().__init__(self.message)
 
-async function createBook(data) {
-  if (data.isbn) {
-    const existing = await bookRepository.findByISBN(data.isbn);
-    if (existing) {
-      // Throw business error - handler will convert to HTTP error
-      throw new BusinessError('Duplicate ISBN', 'DUPLICATE_ISBN');
-    }
-  }
-  // ...
-}
+class BookService:
+    async def create_book(self, data: dict):
+        if data.get("isbn"):
+            existing = await self.book_repository.find_by_isbn(data["isbn"])
+            if existing:
+                # Raise business error - handler will convert to HTTP error
+                raise BusinessError("Duplicate ISBN", "DUPLICATE_ISBN")
+        # ...
 ```
 
 ---
@@ -743,283 +879,278 @@ A repository is a module that encapsulates **all database operations** for a spe
 
 **Example 1: Book Repository**
 
-```javascript
-// bookRepository.js
+```python
+# book_repository.py
+from typing import List, Optional, Dict
+from datetime import datetime
 
-// Find all books with filtering and sorting
-async function findAll({ sortBy = 'date', limit = 10, offset = 0 }) {
-  let query = 'SELECT * FROM books WHERE deleted_at IS NULL';
-  const params = [];
-  
-  // Add sorting
-  if (sortBy === 'name') {
-    query += ' ORDER BY title ASC';
-  } else {
-    query += ' ORDER BY created_at DESC';
-  }
-  
-  // Add pagination
-  query += ' LIMIT ? OFFSET ?';
-  params.push(limit, offset);
-  
-  const rows = await db.query(query, params);
-  return rows.map(mapRowToBook);
-}
-
-// Find one book by ID
-async function findById(id) {
-  const query = 'SELECT * FROM books WHERE id = ? AND deleted_at IS NULL';
-  const rows = await db.query(query, [id]);
-  
-  if (rows.length === 0) {
-    return null;
-  }
-  
-  return mapRowToBook(rows[0]);
-}
-
-// Find by ISBN
-async function findByISBN(isbn) {
-  const query = 'SELECT * FROM books WHERE isbn = ? AND deleted_at IS NULL';
-  const rows = await db.query(query, [isbn]);
-  
-  if (rows.length === 0) {
-    return null;
-  }
-  
-  return mapRowToBook(rows[0]);
-}
-
-// Insert new book
-async function insert(book) {
-  const query = `
-    INSERT INTO books (id, title, author, isbn, published_year, user_id, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `;
-  
-  const params = [
-    book.id,
-    book.title,
-    book.author,
-    book.isbn,
-    book.publishedYear,
-    book.userId,
-    book.createdAt,
-    book.updatedAt
-  ];
-  
-  await db.query(query, params);
-  return book;
-}
-
-// Update book
-async function update(id, updates) {
-  const query = `
-    UPDATE books 
-    SET title = ?, author = ?, isbn = ?, published_year = ?, updated_at = ?
-    WHERE id = ? AND deleted_at IS NULL
-  `;
-  
-  const params = [
-    updates.title,
-    updates.author,
-    updates.isbn,
-    updates.publishedYear,
-    new Date(),
-    id
-  ];
-  
-  const result = await db.query(query, params);
-  return result.affectedRows > 0;
-}
-
-// Soft delete
-async function softDelete(id) {
-  const query = 'UPDATE books SET deleted_at = ? WHERE id = ?';
-  const result = await db.query(query, [new Date(), id]);
-  return result.affectedRows > 0;
-}
-
-// Helper function to map database row to object
-function mapRowToBook(row) {
-  return {
-    id: row.id,
-    title: row.title,
-    author: row.author,
-    isbn: row.isbn,
-    publishedYear: row.published_year,
-    userId: row.user_id,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at
-  };
-}
-
-module.exports = {
-  findAll,
-  findById,
-  findByISBN,
-  insert,
-  update,
-  softDelete
-};
+class BookRepository:
+    def __init__(self, db):
+        self.db = db
+    
+    # Find all books with filtering and sorting
+    async def find_all(
+        self,
+        sort_by: str = "date",
+        limit: int = 10,
+        offset: int = 0
+    ) -> List[Dict]:
+        query = 'SELECT * FROM books WHERE deleted_at IS NULL'
+        params = []
+        
+        # Add sorting
+        if sort_by == 'name':
+            query += ' ORDER BY title ASC'
+        else:
+            query += ' ORDER BY created_at DESC'
+        
+        # Add pagination
+        query += ' LIMIT ? OFFSET ?'
+        params.extend([limit, offset])
+        
+        rows = await self.db.fetch_all(query, params)
+        return [self._map_row_to_book(row) for row in rows]
+    
+    # Find one book by ID
+    async def find_by_id(self, book_id: str) -> Optional[Dict]:
+        query = 'SELECT * FROM books WHERE id = ? AND deleted_at IS NULL'
+        rows = await self.db.fetch_all(query, [book_id])
+        
+        if not rows:
+            return None
+        
+        return self._map_row_to_book(rows[0])
+    
+    # Find by ISBN
+    async def find_by_isbn(self, isbn: str) -> Optional[Dict]:
+        query = 'SELECT * FROM books WHERE isbn = ? AND deleted_at IS NULL'
+        rows = await self.db.fetch_all(query, [isbn])
+        
+        if not rows:
+            return None
+        
+        return self._map_row_to_book(rows[0])
+    
+    # Insert new book
+    async def insert(self, book: Dict) -> Dict:
+        query = '''
+            INSERT INTO books (id, title, author, isbn, published_year, user_id, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        '''
+        
+        params = [
+            book["id"],
+            book["title"],
+            book["author"],
+            book.get("isbn"),
+            book.get("published_year"),
+            book["user_id"],
+            book["created_at"],
+            book["updated_at"]
+        ]
+        
+        await self.db.execute(query, params)
+        return book
+    
+    # Update book
+    async def update(self, book_id: str, updates: Dict) -> bool:
+        query = '''
+            UPDATE books 
+            SET title = ?, author = ?, isbn = ?, published_year = ?, updated_at = ?
+            WHERE id = ? AND deleted_at IS NULL
+        '''
+        
+        params = [
+            updates["title"],
+            updates["author"],
+            updates.get("isbn"),
+            updates.get("published_year"),
+            datetime.now(),
+            book_id
+        ]
+        
+        result = await self.db.execute(query, params)
+        return result.rowcount > 0
+    
+    # Soft delete
+    async def soft_delete(self, book_id: str) -> bool:
+        query = 'UPDATE books SET deleted_at = ? WHERE id = ?'
+        result = await self.db.execute(query, [datetime.now(), book_id])
+        return result.rowcount > 0
+    
+    # Helper function to map database row to object
+    def _map_row_to_book(self, row) -> Dict:
+        return {
+            "id": row["id"],
+            "title": row["title"],
+            "author": row["author"],
+            "isbn": row["isbn"],
+            "published_year": row["published_year"],
+            "user_id": row["user_id"],
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"]
+        }
 ```
 
 **Example 2: User Repository**
 
-```javascript
-// userRepository.js
+```python
+# user_repository.py
+from typing import Optional, Dict
 
-async function findById(id) {
-  const query = 'SELECT * FROM users WHERE id = ?';
-  const rows = await db.query(query, [id]);
-  return rows.length > 0 ? mapRowToUser(rows[0]) : null;
-}
-
-async function incrementBookCount(userId) {
-  const query = 'UPDATE users SET book_count = book_count + 1 WHERE id = ?';
-  await db.query(query, [userId]);
-}
-
-async function decrementBookCount(userId) {
-  const query = 'UPDATE users SET book_count = book_count - 1 WHERE id = ?';
-  await db.query(query, [userId]);
-}
-
-// With transaction support
-async function incrementBookCount(userId, transaction = null) {
-  const db = transaction || database;
-  const query = 'UPDATE users SET book_count = book_count + 1 WHERE id = ?';
-  await db.query(query, [userId]);
-}
-
-function mapRowToUser(row) {
-  return {
-    id: row.id,
-    email: row.email,
-    name: row.name,
-    bookCount: row.book_count,
-    createdAt: row.created_at
-  };
-}
-
-module.exports = {
-  findById,
-  incrementBookCount,
-  decrementBookCount
-};
+class UserRepository:
+    def __init__(self, db):
+        self.db = db
+    
+    async def find_by_id(self, user_id: str) -> Optional[Dict]:
+        query = 'SELECT * FROM users WHERE id = ?'
+        rows = await self.db.fetch_all(query, [user_id])
+        return self._map_row_to_user(rows[0]) if rows else None
+    
+    async def increment_book_count(self, user_id: str, transaction=None):
+        db = transaction or self.db
+        query = 'UPDATE users SET book_count = book_count + 1 WHERE id = ?'
+        await db.execute(query, [user_id])
+    
+    async def decrement_book_count(self, user_id: str, transaction=None):
+        db = transaction or self.db
+        query = 'UPDATE users SET book_count = book_count - 1 WHERE id = ?'
+        await db.execute(query, [user_id])
+    
+    def _map_row_to_user(self, row) -> Dict:
+        return {
+            "id": row["id"],
+            "email": row["email"],
+            "name": row["name"],
+            "book_count": row["book_count"],
+            "created_at": row["created_at"]
+        }
 ```
 
 **Example 3: Advanced Queries**
 
-```javascript
-// Find books with complex filtering
-async function findByFilters({ genre, minYear, maxYear, authorName, limit, offset }) {
-  let query = 'SELECT * FROM books WHERE deleted_at IS NULL';
-  const params = [];
-  
-  if (genre) {
-    query += ' AND genre = ?';
-    params.push(genre);
-  }
-  
-  if (minYear) {
-    query += ' AND published_year >= ?';
-    params.push(minYear);
-  }
-  
-  if (maxYear) {
-    query += ' AND published_year <= ?';
-    params.push(maxYear);
-  }
-  
-  if (authorName) {
-    query += ' AND author LIKE ?';
-    params.push(`%${authorName}%`);
-  }
-  
-  query += ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
-  params.push(limit, offset);
-  
-  const rows = await db.query(query, params);
-  return rows.map(mapRowToBook);
-}
+```python
+from typing import List, Optional, Dict
 
-// Join query
-async function findBooksWithUserDetails(bookId) {
-  const query = `
-    SELECT 
-      b.*,
-      u.name as user_name,
-      u.email as user_email
-    FROM books b
-    JOIN users u ON b.user_id = u.id
-    WHERE b.id = ? AND b.deleted_at IS NULL
-  `;
-  
-  const rows = await db.query(query, [bookId]);
-  
-  if (rows.length === 0) {
-    return null;
-  }
-  
-  const row = rows[0];
-  return {
-    book: mapRowToBook(row),
-    user: {
-      name: row.user_name,
-      email: row.user_email
-    }
-  };
-}
+class BookRepository:
+    def __init__(self, db):
+        self.db = db
+    
+    # Find books with complex filtering
+    async def find_by_filters(
+        self,
+        genre: Optional[str] = None,
+        min_year: Optional[int] = None,
+        max_year: Optional[int] = None,
+        author_name: Optional[str] = None,
+        limit: int = 10,
+        offset: int = 0
+    ) -> List[Dict]:
+        query = 'SELECT * FROM books WHERE deleted_at IS NULL'
+        params = []
+        
+        if genre:
+            query += ' AND genre = ?'
+            params.append(genre)
+        
+        if min_year:
+            query += ' AND published_year >= ?'
+            params.append(min_year)
+        
+        if max_year:
+            query += ' AND published_year <= ?'
+            params.append(max_year)
+        
+        if author_name:
+            query += ' AND author LIKE ?'
+            params.append(f'%{author_name}%')
+        
+        query += ' ORDER BY created_at DESC LIMIT ? OFFSET ?'
+        params.extend([limit, offset])
+        
+        rows = await self.db.fetch_all(query, params)
+        return [self._map_row_to_book(row) for row in rows]
+    
+    # Join query
+    async def find_books_with_user_details(self, book_id: str) -> Optional[Dict]:
+        query = '''
+            SELECT 
+                b.*,
+                u.name as user_name,
+                u.email as user_email
+            FROM books b
+            JOIN users u ON b.user_id = u.id
+            WHERE b.id = ? AND b.deleted_at IS NULL
+        '''
+        
+        rows = await self.db.fetch_all(query, [book_id])
+        
+        if not rows:
+            return None
+        
+        row = rows[0]
+        return {
+            "book": self._map_row_to_book(row),
+            "user": {
+                "name": row["user_name"],
+                "email": row["user_email"]
+            }
+        }
+    
+    def _map_row_to_book(self, row) -> Dict:
+        return {
+            "id": row["id"],
+            "title": row["title"],
+            "author": row["author"],
+            "isbn": row["isbn"],
+            "user_id": row["user_id"],
+            "created_at": row["created_at"]
+        }
 ```
 
 #### Repository Best Practices
 
 **Single Purpose per Method:**
-```javascript
-// GOOD - Separate methods for different queries
-bookRepository.findById(id)
-bookRepository.findByISBN(isbn)
-bookRepository.findAll(filters)
+```python
+# GOOD - Separate methods for different queries
+class BookRepository:
+    async def find_by_id(self, book_id): ...
+    async def find_by_isbn(self, isbn): ...
+    async def find_all(self, filters): ...
 
-// BAD - One method trying to do everything
-bookRepository.find({ id, isbn, filters }) // Confusing and hard to maintain
+# BAD - One method trying to do everything
+class BookRepository:
+    async def find(self, id=None, isbn=None, filters=None): ...  # Confusing and hard to maintain
 ```
 
 **No Business Logic:**
-```javascript
-// WRONG - Business logic in repository
-async function insert(book) {
-  // ❌ This check belongs in service layer
-  if (book.publishedYear > new Date().getFullYear()) {
-    throw new Error('Future year not allowed');
-  }
-  
-  await db.query('INSERT INTO books ...', book);
-}
+```python
+# WRONG - Business logic in repository
+async def insert(self, book: dict):
+    # ❌ This check belongs in service layer
+    if book.get("published_year", 0) > datetime.now().year:
+        raise ValueError('Future year not allowed')
+    
+    await self.db.execute('INSERT INTO books ...', book)
 
-// CORRECT - Repository just does database operations
-async function insert(book) {
-  await db.query('INSERT INTO books ...', book);
-}
+# CORRECT - Repository just does database operations
+async def insert(self, book: dict):
+    await self.db.execute('INSERT INTO books ...', book)
 ```
 
 **Always Return Consistent Types:**
-```javascript
-// GOOD - Always return same type
-async function findById(id) {
-  const rows = await db.query('SELECT * FROM books WHERE id = ?', [id]);
-  return rows.length > 0 ? mapRowToBook(rows[0]) : null; // Always Book | null
-}
+```python
+# GOOD - Always return same type
+async def find_by_id(self, book_id: str) -> Optional[Dict]:
+    rows = await self.db.fetch_all('SELECT * FROM books WHERE id = ?', [book_id])
+    return self._map_row_to_book(rows[0]) if rows else None  # Always Dict | None
 
-// BAD - Inconsistent return types
-async function findById(id) {
-  const rows = await db.query('SELECT * FROM books WHERE id = ?', [id]);
-  if (rows.length === 0) {
-    throw new Error('Not found'); // Sometimes throws
-  }
-  return mapRowToBook(rows[0]); // Sometimes returns book
-}
+# BAD - Inconsistent return types
+async def find_by_id(self, book_id: str):
+    rows = await self.db.fetch_all('SELECT * FROM books WHERE id = ?', [book_id])
+    if not rows:
+        raise ValueError('Not found')  # Sometimes raises
+    return self._map_row_to_book(rows[0])  # Sometimes returns book
 ```
 
 ---
@@ -1074,127 +1205,173 @@ CLIENT REQUEST
 
 **Complete Code Example:**
 
-```javascript
-// ============================================
-// HANDLER (bookHandler.js)
-// ============================================
-async function createBookHandler(req, res) {
-  try {
-    // 1. Extract and validate
-    const { title, author, isbn } = req.body;
-    const userId = req.context.userId; // From auth middleware
-    
-    if (!title || !author) {
-      return res.status(400).json({ error: 'Title and author are required' });
-    }
-    
-    // 2. Call service
-    const book = await bookService.createBook({ title, author, isbn, userId });
-    
-    // 3. Send response
-    res.status(201).json(book);
-    
-  } catch (error) {
-    // 4. Handle errors
-    if (error.code === 'DUPLICATE_ISBN') {
-      return res.status(409).json({ error: error.message });
-    }
-    
-    console.error('Handler error:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-}
+```python
+# ============================================
+# HANDLER (book_handler.py)
+# ============================================
+from fastapi import APIRouter, HTTPException, Request, status
+from pydantic import BaseModel
 
-// ============================================
-// SERVICE (bookService.js)
-// ============================================
-async function createBook({ title, author, isbn, userId }) {
-  // 1. Business validation
-  if (isbn && !isValidISBN(isbn)) {
-    throw new BusinessError('Invalid ISBN format', 'INVALID_ISBN');
-  }
-  
-  // 2. Check for duplicates
-  if (isbn) {
-    const existing = await bookRepository.findByISBN(isbn);
-    if (existing) {
-      throw new BusinessError('Book with this ISBN already exists', 'DUPLICATE_ISBN');
-    }
-  }
-  
-  // 3. Create book object
-  const book = {
-    id: generateUUID(),
-    title: title.trim(),
-    author: author.trim(),
-    isbn,
-    userId,
-    createdAt: new Date(),
-    updatedAt: new Date()
-  };
-  
-  // 4. Persist to database
-  await bookRepository.insert(book);
-  
-  // 5. Update user's book count
-  await userRepository.incrementBookCount(userId);
-  
-  // 6. Send notification (fire and forget - don't wait)
-  emailService.sendBookCreatedEmail(userId, book).catch(err => {
-    console.error('Failed to send email:', err);
-  });
-  
-  // 7. Return result
-  return book;
-}
+router = APIRouter()
 
-// ============================================
-// REPOSITORY (bookRepository.js)
-// ============================================
-async function findByISBN(isbn) {
-  const query = 'SELECT * FROM books WHERE isbn = ? AND deleted_at IS NULL';
-  const rows = await db.query(query, [isbn]);
-  return rows.length > 0 ? mapRowToBook(rows[0]) : null;
-}
+class CreateBookRequest(BaseModel):
+    title: str
+    author: str
+    isbn: str | None = None
 
-async function insert(book) {
-  const query = `
-    INSERT INTO books (id, title, author, isbn, user_id, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `;
-  
-  await db.query(query, [
-    book.id,
-    book.title,
-    book.author,
-    book.isbn,
-    book.userId,
-    book.createdAt,
-    book.updatedAt
-  ]);
-  
-  return book;
-}
+@router.post("/api/books", status_code=status.HTTP_201_CREATED)
+async def create_book_handler(book_data: CreateBookRequest, request: Request):
+    try:
+        # 1. Extract and validate (done by Pydantic)
+        user_id = request.state.user_id  # From auth middleware
+        
+        # 2. Call service
+        book = await book_service.create_book(
+            title=book_data.title,
+            author=book_data.author,
+            isbn=book_data.isbn,
+            user_id=user_id
+        )
+        
+        # 3. Send response
+        return book
+        
+    except ValueError as error:
+        # 4. Handle errors
+        if "DUPLICATE_ISBN" in str(error):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=str(error)
+            )
+        
+        print(f"Handler error: {error}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error"
+        )
 
-function mapRowToBook(row) {
-  return {
-    id: row.id,
-    title: row.title,
-    author: row.author,
-    isbn: row.isbn,
-    userId: row.user_id,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at
-  };
-}
+# ============================================
+# SERVICE (book_service.py)
+# ============================================
+from datetime import datetime
+import uuid
+from typing import Optional
 
-// ============================================
-// USER REPOSITORY (userRepository.js)
-// ============================================
-async function incrementBookCount(userId) {
-  const query = 'UPDATE users SET book_count = book_count + 1 WHERE id = ?';
-  await db.query(query, [userId]);
-}
+class BusinessError(Exception):
+    def __init__(self, message: str, code: str):
+        self.message = message
+        self.code = code
+        super().__init__(self.message)
+
+def is_valid_isbn(isbn: str) -> bool:
+    # ISBN validation logic here
+    return len(isbn) in [10, 13]
+
+class BookService:
+    def __init__(self, book_repository, user_repository, email_service):
+        self.book_repository = book_repository
+        self.user_repository = user_repository
+        self.email_service = email_service
+    
+    async def create_book(
+        self,
+        title: str,
+        author: str,
+        isbn: Optional[str],
+        user_id: str
+    ) -> dict:
+        # 1. Business validation
+        if isbn and not is_valid_isbn(isbn):
+            raise BusinessError('Invalid ISBN format', 'INVALID_ISBN')
+        
+        # 2. Check for duplicates
+        if isbn:
+            existing = await self.book_repository.find_by_isbn(isbn)
+            if existing:
+                raise BusinessError(
+                    'Book with this ISBN already exists',
+                    'DUPLICATE_ISBN'
+                )
+        
+        # 3. Create book object
+        book = {
+            "id": str(uuid.uuid4()),
+            "title": title.strip(),
+            "author": author.strip(),
+            "isbn": isbn,
+            "user_id": user_id,
+            "created_at": datetime.now(),
+            "updated_at": datetime.now()
+        }
+        
+        # 4. Persist to database
+        await self.book_repository.insert(book)
+        
+        # 5. Update user's book count
+        await self.user_repository.increment_book_count(user_id)
+        
+        # 6. Send notification (fire and forget - don't wait)
+        try:
+            await self.email_service.send_book_created_email(user_id, book)
+        except Exception as err:
+            print(f"Failed to send email: {err}")
+        
+        # 7. Return result
+        return book
+
+# ============================================
+# REPOSITORY (book_repository.py)
+# ============================================
+from typing import Optional, Dict
+
+class BookRepository:
+    def __init__(self, db):
+        self.db = db
+    
+    async def find_by_isbn(self, isbn: str) -> Optional[Dict]:
+        query = 'SELECT * FROM books WHERE isbn = ? AND deleted_at IS NULL'
+        rows = await self.db.fetch_all(query, [isbn])
+        return self._map_row_to_book(rows[0]) if rows else None
+    
+    async def insert(self, book: Dict) -> Dict:
+        query = '''
+            INSERT INTO books (id, title, author, isbn, user_id, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        '''
+        
+        await self.db.execute(query, [
+            book["id"],
+            book["title"],
+            book["author"],
+            book["isbn"],
+            book["user_id"],
+            book["created_at"],
+            book["updated_at"]
+        ])
+        
+        return book
+    
+    def _map_row_to_book(self, row) -> Dict:
+        return {
+            "id": row["id"],
+            "title": row["title"],
+            "author": row["author"],
+            "isbn": row["isbn"],
+            "user_id": row["user_id"],
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"]
+        }
+
+# ============================================
+# USER REPOSITORY (user_repository.py)
+# ============================================
+class UserRepository:
+    def __init__(self, db):
+        self.db = db
+    
+    async def increment_book_count(self, user_id: str):
+        query = 'UPDATE users SET book_count = book_count + 1 WHERE id = ?'
+        await self.db.execute(query, [user_id])
 ```
 
 ---
@@ -1216,109 +1393,122 @@ Request → [MW1] → [MW2] → [Routing] → [MW3] → [Handler] → [MW4] → 
 
 #### Problem Without Middleware
 
-```javascript
-// Every handler has duplicated code
-app.get('/api/books', (req, res) => {
-  // Check authentication - DUPLICATED
-  if (!req.headers.authorization) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
-  
-  // Log request - DUPLICATED
-  console.log(`${req.method} ${req.path}`);
-  
-  // CORS headers - DUPLICATED
-  res.setHeader('Access-Control-Allow-Origin', 'https://example.com');
-  
-  // Actual logic
-  const books = await getBooks();
-  res.json(books);
-});
+```python
+# Every handler has duplicated code
+from fastapi import FastAPI, HTTPException, Header
+import logging
 
-app.post('/api/books', (req, res) => {
-  // Same authentication - DUPLICATED
-  if (!req.headers.authorization) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
-  
-  // Same logging - DUPLICATED
-  console.log(`${req.method} ${req.path}`);
-  
-  // Same CORS - DUPLICATED
-  res.setHeader('Access-Control-Allow-Origin', 'https://example.com');
-  
-  // Actual logic
-  const book = await createBook(req.body);
-  res.json(book);
-});
+app = FastAPI()
 
-// ... repeated for 100s of endpoints
+@app.get('/api/books')
+async def get_books(authorization: str = Header(None)):
+    # Check authentication - DUPLICATED
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    
+    # Log request - DUPLICATED
+    logging.info("GET /api/books")
+    
+    # CORS headers would be set via response - DUPLICATED
+    # (In FastAPI, CORS is typically handled by middleware)
+    
+    # Actual logic
+    books = await get_books_data()
+    return books
+
+@app.post('/api/books')
+async def create_book(authorization: str = Header(None), book_data: dict = None):
+    # Same authentication - DUPLICATED
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    
+    # Same logging - DUPLICATED
+    logging.info("POST /api/books")
+    
+    # Actual logic
+    book = await create_book_data(book_data)
+    return book
+
+# ... repeated for 100s of endpoints
 ```
 
 #### Solution With Middleware
 
-```javascript
-// Define once, use everywhere
-app.use(corsMiddleware);
-app.use(loggingMiddleware);
-app.use(authMiddleware);
+```python
+# Define once, use everywhere
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
-// Handlers focus only on their specific logic
-app.get('/api/books', async (req, res) => {
-  const books = await getBooks();
-  res.json(books);
-});
+app = FastAPI()
 
-app.post('/api/books', async (req, res) => {
-  const book = await createBook(req.body);
-  res.json(book);
-});
+# Add middleware
+app.add_middleware(CORSMiddleware, allow_origins=["https://example.com"])
+app.middleware("http")(logging_middleware)
+app.middleware("http")(auth_middleware)
+
+# Handlers focus only on their specific logic
+@app.get('/api/books')
+async def get_books():
+    books = await get_books_data()
+    return books
+
+@app.post('/api/books')
+async def create_book(book_data: dict):
+    book = await create_book_data(book_data)
+    return book
 ```
 
 ### How Middleware Works
 
-Every middleware receives three parameters:
+Every middleware in FastAPI is a function that receives the request and a call_next function:
 
-```javascript
-function middleware(req, res, next) {
-  // req: Request object (can read and modify)
-  // res: Response object (can send response)
-  // next: Function to pass control to next middleware
-  
-  // Do something...
-  
-  next(); // Pass to next middleware
-}
+```python
+from fastapi import Request
+from starlette.middleware.base import BaseHTTPMiddleware
+
+class CustomMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        # request: Request object (can read and modify)
+        # call_next: Function to pass control to next middleware/handler
+        
+        # Do something...
+        
+        response = await call_next(request)  # Pass to next middleware
+        
+        # Can also modify response here
+        return response
 ```
 
-#### The `next()` Function
+#### The `call_next()` Function
 
-The `next()` function is crucial - it controls the flow:
+The `call_next()` function is crucial - it controls the flow:
 
-```javascript
-function middleware1(req, res, next) {
-  console.log('MW1: Before next()');
-  next(); // Pass control to next middleware
-  console.log('MW1: After next()'); // Executes after downstream completes
-}
+```python
+class Middleware1(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        print('MW1: Before call_next()')
+        response = await call_next(request)  # Pass control to next middleware
+        print('MW1: After call_next()')  # Executes after downstream completes
+        return response
 
-function middleware2(req, res, next) {
-  console.log('MW2: Before next()');
-  next();
-  console.log('MW2: After next()');
-}
+class Middleware2(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        print('MW2: Before call_next()')
+        response = await call_next(request)
+        print('MW2: After call_next()')
+        return response
 
-function handler(req, res) {
-  console.log('Handler executing');
-  res.send('Done');
-}
+@app.get("/test")
+async def handler():
+    print('Handler executing')
+    return {"message": "Done"}
 
-// Order of execution:
-// MW1: Before next()
-// MW2: Before next()
-// Handler executing
-// MW2: After next()
-// MW1: After next()
+# Order of execution:
+# MW1: Before call_next()
+# MW2: Before call_next()
+# Handler executing
+# MW2: After call_next()
+# MW1: After call_next()
 ```
 
 **Flow Diagram:**
@@ -1365,18 +1555,25 @@ function handler(req, res) {
 
 #### Middleware Can Terminate the Request
 
-```javascript
-function authMiddleware(req, res, next) {
-  const token = req.headers.authorization;
-  
-  if (!token) {
-    // Don't call next() - stop here and send response
-    return res.status(401).json({ error: 'No token provided' });
-  }
-  
-  // Token exists, continue to next middleware
-  next();
-}
+```python
+from fastapi import Request, HTTPException
+from fastapi.responses import JSONResponse
+from starlette.middleware.base import BaseHTTPMiddleware
+
+class AuthMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        token = request.headers.get('authorization')
+        
+        if not token:
+            # Don't call call_next() - stop here and return response
+            return JSONResponse(
+                status_code=401,
+                content={"error": "No token provided"}
+            )
+        
+        # Token exists, continue to next middleware
+        response = await call_next(request)
+        return response
 ```
 
 ### Common Middleware Types
@@ -1389,28 +1586,47 @@ function authMiddleware(req, res, next) {
 
 **When:** First middleware (before routing)
 
-```javascript
-function corsMiddleware(req, res, next) {
-  const allowedOrigins = ['https://example.com', 'https://app.example.com'];
-  const origin = req.headers.origin;
-  
-  if (allowedOrigins.includes(origin)) {
-    res.setHeader('Access-Control-Allow-Origin', origin);
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-    res.setHeader('Access-Control-Allow-Credentials', 'true');
-  }
-  
-  // Handle preflight requests
-  if (req.method === 'OPTIONS') {
-    return res.status(204).send();
-  }
-  
-  next();
-}
+```python
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 
-// Usage
-app.use(corsMiddleware);
+app = FastAPI()
+
+# Using built-in CORS middleware (recommended)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://example.com", "https://app.example.com"],
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization"],
+)
+
+# Or custom CORS middleware
+from starlette.middleware.base import BaseHTTPMiddleware
+
+class CustomCORSMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        allowed_origins = ['https://example.com', 'https://app.example.com']
+        origin = request.headers.get('origin')
+        
+        # Handle preflight requests
+        if request.method == 'OPTIONS':
+            response = Response(status_code=204)
+            if origin in allowed_origins:
+                response.headers['Access-Control-Allow-Origin'] = origin
+                response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+                response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+                response.headers['Access-Control-Allow-Credentials'] = 'true'
+            return response
+        
+        response = await call_next(request)
+        
+        if origin in allowed_origins:
+            response.headers['Access-Control-Allow-Origin'] = origin
+            response.headers['Access-Control-Allow-Credentials'] = 'true'
+        
+        return response
 ```
 
 #### 2. Logging Middleware
@@ -1421,58 +1637,71 @@ app.use(corsMiddleware);
 
 **When:** Early in the chain (after CORS)
 
-```javascript
-function loggingMiddleware(req, res, next) {
-  const start = Date.now();
-  
-  // Log request
-  console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
-  console.log('Query params:', req.query);
-  console.log('Body:', req.body);
-  
-  // Capture response time after response is sent
-  res.on('finish', () => {
-    const duration = Date.now() - start;
-    console.log(`[${new Date().toISOString()}] ${req.method} ${req.path} - ${res.statusCode} - ${duration}ms`);
-  });
-  
-  next();
-}
+```python
+import logging
+import time
+from fastapi import Request
+from starlette.middleware.base import BaseHTTPMiddleware
+from datetime import datetime
 
-// Usage
-app.use(loggingMiddleware);
+logger = logging.getLogger(__name__)
+
+class LoggingMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        start_time = time.time()
+        
+        # Log request
+        logger.info(f"[{datetime.now().isoformat()}] {request.method} {request.url.path}")
+        logger.info(f"Query params: {dict(request.query_params)}")
+        
+        # Process request
+        response = await call_next(request)
+        
+        # Log response time
+        duration = (time.time() - start_time) * 1000  # Convert to milliseconds
+        logger.info(
+            f"[{datetime.now().isoformat()}] {request.method} {request.url.path} - "
+            f"{response.status_code} - {duration:.2f}ms"
+        )
+        
+        return response
+
+# Usage
+app.add_middleware(LoggingMiddleware)
 ```
 
 **Advanced Logging Example:**
 
-```javascript
-const winston = require('winston');
+```python
+import logging
+import time
+from fastapi import Request
+from starlette.middleware.base import BaseHTTPMiddleware
 
-function advancedLoggingMiddleware(req, res, next) {
-  const requestId = req.context.requestId; // From earlier middleware
-  const start = Date.now();
-  
-  const logData = {
-    requestId,
-    method: req.method,
-    path: req.path,
-    ip: req.ip,
-    userAgent: req.headers['user-agent'],
-    userId: req.context?.userId || 'anonymous'
-  };
-  
-  winston.info('Incoming request', logData);
-  
-  res.on('finish', () => {
-    winston.info('Request completed', {
-      ...logData,
-      statusCode: res.statusCode,
-      duration: Date.now() - start
-    });
-  });
-  
-  next();
-}
+logger = logging.getLogger(__name__)
+
+class AdvancedLoggingMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        request_id = getattr(request.state, 'request_id', 'unknown')
+        start_time = time.time()
+        
+        log_data = {
+            "request_id": request_id,
+            "method": request.method,
+            "path": request.url.path,
+            "ip": request.client.host if request.client else None,
+            "user_agent": request.headers.get("user-agent"),
+            "user_id": getattr(request.state, 'user_id', 'anonymous')
+        }
+        
+        logger.info(f"Incoming request: {log_data}")
+        
+        response = await call_next(request)
+        
+        duration = (time.time() - start_time) * 1000
+        logger.info(f"Request completed: {log_data} - Status: {response.status_code} - Duration: {duration:.2f}ms")
+        
+        return response
 ```
 
 #### 3. Authentication Middleware
@@ -1483,69 +1712,75 @@ function advancedLoggingMiddleware(req, res, next) {
 
 **When:** After logging, before handlers
 
-```javascript
-const jwt = require('jsonwebtoken');
+```python
+from fastapi import Request, HTTPException, status
+from starlette.middleware.base import BaseHTTPMiddleware
+from jose import JWTError, jwt
+import os
 
-function authMiddleware(req, res, next) {
-  // 1. Extract token
-  const authHeader = req.headers.authorization;
-  
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ error: 'No token provided' });
-  }
-  
-  const token = authHeader.substring(7); // Remove 'Bearer '
-  
-  try {
-    // 2. Verify token
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+class AuthMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        # 1. Extract token
+        auth_header = request.headers.get('authorization')
+        
+        if not auth_header or not auth_header.startswith('Bearer '):
+            return JSONResponse(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                content={"error": "No token provided"}
+            )
+        
+        token = auth_header[7:]  # Remove 'Bearer '
+        
+        try:
+            # 2. Verify token
+            payload = jwt.decode(
+                token,
+                os.getenv('JWT_SECRET'),
+                algorithms=["HS256"]
+            )
+            
+            # 3. Add user info to request state
+            request.state.user_id = payload.get('user_id')
+            request.state.user_role = payload.get('role')
+            request.state.permissions = payload.get('permissions', [])
+            
+            # 4. Continue to next middleware
+            response = await call_next(request)
+            return response
+            
+        except JWTError:
+            # Token invalid or expired
+            return JSONResponse(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                content={"error": "Invalid token"}
+            )
+
+# Usage - apply to specific routes
+# In FastAPI, middleware applies globally, so use dependencies for route-specific auth
+from fastapi import Depends, Header
+
+async def verify_token(authorization: str = Header(None)):
+    if not authorization or not authorization.startswith('Bearer '):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="No token provided"
+        )
     
-    // 3. Add user info to request context
-    req.context = req.context || {};
-    req.context.userId = decoded.userId;
-    req.context.userRole = decoded.role;
-    req.context.permissions = decoded.permissions;
-    
-    // 4. Continue to next middleware
-    next();
-    
-  } catch (error) {
-    // Token invalid or expired
-    return res.status(401).json({ error: 'Invalid token' });
-  }
-}
+    token = authorization[7:]
+    try:
+        payload = jwt.decode(token, os.getenv('JWT_SECRET'), algorithms=["HS256"])
+        return payload
+    except JWTError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token"
+        )
 
-// Usage - apply to specific routes
-app.use('/api/protected/*', authMiddleware);
-
-// Or apply to specific endpoints
-app.post('/api/books', authMiddleware, createBookHandler);
-```
-
-**Session-based Authentication:**
-
-```javascript
-function sessionAuthMiddleware(req, res, next) {
-  const sessionId = req.cookies.sessionId;
-  
-  if (!sessionId) {
-    return res.status(401).json({ error: 'Not authenticated' });
-  }
-  
-  // Verify session in database or Redis
-  const session = await sessionStore.get(sessionId);
-  
-  if (!session || session.expiresAt < Date.now()) {
-    return res.status(401).json({ error: 'Session expired' });
-  }
-  
-  // Add user info to context
-  req.context = req.context || {};
-  req.context.userId = session.userId;
-  req.context.sessionId = sessionId;
-  
-  next();
-}
+# Use as dependency
+@app.post("/api/books")
+async def create_book(book_data: dict, user_data: dict = Depends(verify_token)):
+    # user_data contains decoded token payload
+    return {"message": "Book created"}
 ```
 
 #### 4. Rate Limiting Middleware
@@ -1556,59 +1791,76 @@ function sessionAuthMiddleware(req, res, next) {
 
 **When:** Early in the chain
 
-```javascript
-const rateLimit = require('express-rate-limit');
+```python
+# Using slowapi library (recommended)
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+from fastapi import FastAPI, Request
 
-// Simple rate limiting
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // Max 100 requests per window
-  message: 'Too many requests, please try again later',
-  standardHeaders: true, // Return rate limit info in `RateLimit-*` headers
-  legacyHeaders: false
-});
+app = FastAPI()
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-app.use('/api/', limiter);
+@app.get("/api/books")
+@limiter.limit("100/15minutes")  # 100 requests per 15 minutes
+async def get_books(request: Request):
+    return {"books": []}
 ```
 
 **Custom Rate Limiting:**
 
-```javascript
-const requestCounts = new Map(); // In production, use Redis
+```python
+import time
+from collections import defaultdict
+from fastapi import Request
+from fastapi.responses import JSONResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 
-function customRateLimitMiddleware(req, res, next) {
-  const clientIp = req.ip;
-  const now = Date.now();
-  const windowMs = 60 * 1000; // 1 minute
-  const maxRequests = 30;
-  
-  // Get or create client record
-  let clientData = requestCounts.get(clientIp) || { count: 0, resetTime: now + windowMs };
-  
-  // Reset if window expired
-  if (now > clientData.resetTime) {
-    clientData = { count: 0, resetTime: now + windowMs };
-  }
-  
-  // Increment count
-  clientData.count++;
-  requestCounts.set(clientIp, clientData);
-  
-  // Check limit
-  if (clientData.count > maxRequests) {
-    return res.status(429).json({
-      error: 'Too many requests',
-      retryAfter: Math.ceil((clientData.resetTime - now) / 1000)
-    });
-  }
-  
-  // Add rate limit headers
-  res.setHeader('X-RateLimit-Limit', maxRequests);
-  res.setHeader('X-RateLimit-Remaining', maxRequests - clientData.count);
-  res.setHeader('X-RateLimit-Reset', new Date(clientData.resetTime).toISOString());
-  
-  next();
-}
+# In production, use Redis instead of in-memory dict
+request_counts = defaultdict(lambda: {"count": 0, "reset_time": 0})
+
+class CustomRateLimitMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        client_ip = request.client.host
+        now = time.time()
+        window_ms = 60  # 1 minute
+        max_requests = 30
+        
+        # Get or create client record
+        client_data = request_counts[client_ip]
+        
+        # Reset if window expired
+        if now > client_data["reset_time"]:
+            client_data = {"count": 0, "reset_time": now + window_ms}
+            request_counts[client_ip] = client_data
+        
+        # Increment count
+        client_data["count"] += 1
+        
+        # Check limit
+        if client_data["count"] > max_requests:
+            return JSONResponse(
+                status_code=429,
+                content={
+                    "error": "Too many requests",
+                    "retry_after": int(client_data["reset_time"] - now)
+                },
+                headers={
+                    "X-RateLimit-Limit": str(max_requests),
+                    "X-RateLimit-Remaining": "0",
+                    "X-RateLimit-Reset": str(int(client_data["reset_time"]))
+                }
+            )
+        
+        # Add rate limit headers to response
+        response = await call_next(request)
+        response.headers["X-RateLimit-Limit"] = str(max_requests)
+        response.headers["X-RateLimit-Remaining"] = str(max_requests - client_data["count"])
+        response.headers["X-RateLimit-Reset"] = str(int(client_data["reset_time"]))
+        
+        return response
 ```
 
 #### 5. Request ID Middleware
@@ -1619,31 +1871,37 @@ function customRateLimitMiddleware(req, res, next) {
 
 **When:** Very early (first or second)
 
-```javascript
-const { v4: uuidv4 } = require('uuid');
+```python
+import uuid
+from fastapi import Request
+from starlette.middleware.base import BaseHTTPMiddleware
 
-function requestIdMiddleware(req, res, next) {
-  // Generate or use existing request ID
-  const requestId = req.headers['x-request-id'] || uuidv4();
-  
-  // Store in context
-  req.context = req.context || {};
-  req.context.requestId = requestId;
-  
-  // Add to response headers
-  res.setHeader('X-Request-ID', requestId);
-  
-  next();
-}
+class RequestIDMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        # Generate or use existing request ID
+        request_id = request.headers.get('x-request-id') or str(uuid.uuid4())
+        
+        # Store in state
+        request.state.request_id = request_id
+        
+        # Process request
+        response = await call_next(request)
+        
+        # Add to response headers
+        response.headers['X-Request-ID'] = request_id
+        
+        return response
 
-// Usage
-app.use(requestIdMiddleware);
+# Usage
+app.add_middleware(RequestIDMiddleware)
 
-// Now all logs and errors can include this ID
-function loggingMiddleware(req, res, next) {
-  console.log(`[${req.context.requestId}] ${req.method} ${req.path}`);
-  next();
-}
+# Now all logs and errors can include this ID
+class LoggingMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        request_id = getattr(request.state, 'request_id', 'unknown')
+        logger.info(f"[{request_id}] {request.method} {request.url.path}")
+        response = await call_next(request)
+        return response
 ```
 
 #### 6. Security Headers Middleware
@@ -1654,32 +1912,36 @@ function loggingMiddleware(req, res, next) {
 
 **When:** Early in the chain
 
-```javascript
-function securityHeadersMiddleware(req, res, next) {
-  // Prevent clickjacking
-  res.setHeader('X-Frame-Options', 'DENY');
-  
-  // Prevent MIME type sniffing
-  res.setHeader('X-Content-Type-Options', 'nosniff');
-  
-  // Enable XSS protection
-  res.setHeader('X-XSS-Protection', '1; mode=block');
-  
-  // Content Security Policy
-  res.setHeader('Content-Security-Policy', "default-src 'self'");
-  
-  // Strict Transport Security (HTTPS only)
-  res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
-  
-  // Referrer Policy
-  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
-  
-  next();
-}
+```python
+from fastapi import Request
+from starlette.middleware.base import BaseHTTPMiddleware
 
-// Or use helmet library
-const helmet = require('helmet');
-app.use(helmet());
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        
+        # Prevent clickjacking
+        response.headers['X-Frame-Options'] = 'DENY'
+        
+        # Prevent MIME type sniffing
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+        
+        # Enable XSS protection
+        response.headers['X-XSS-Protection'] = '1; mode=block'
+        
+        # Content Security Policy
+        response.headers['Content-Security-Policy'] = "default-src 'self'"
+        
+        # Strict Transport Security (HTTPS only)
+        response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
+        
+        # Referrer Policy
+        response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+        
+        return response
+
+# Usage
+app.add_middleware(SecurityHeadersMiddleware)
 ```
 
 #### 7. Body Parser Middleware
@@ -1756,63 +2018,100 @@ app.use(compression({
 
 **Why:** Centralized error handling, consistent error format
 
-**When:** LAST middleware (catches all errors from upstream)
+**When:** Applied via exception handlers in FastAPI
 
-```javascript
-// Error handling middleware has 4 parameters (err, req, res, next)
-function errorHandlerMiddleware(err, req, res, next) {
-  // Log error
-  console.error('Error:', {
-    requestId: req.context?.requestId,
-    error: err.message,
-    stack: err.stack,
-    path: req.path,
-    method: req.method
-  });
-  
-  // Client errors (4xx)
-  if (err.isBusinessError || err.name === 'ValidationError') {
-    return res.status(err.statusCode || 400).json({
-      error: err.message,
-      code: err.code,
-      requestId: req.context?.requestId
-    });
-  }
-  
-  // Authentication errors
-  if (err.name === 'UnauthorizedError' || err.statusCode === 401) {
-    return res.status(401).json({
-      error: 'Unauthorized',
-      requestId: req.context?.requestId
-    });
-  }
-  
-  // Permission errors
-  if (err.name === 'ForbiddenError' || err.statusCode === 403) {
-    return res.status(403).json({
-      error: 'Forbidden',
-      requestId: req.context?.requestId
-    });
-  }
-  
-  // Not found errors
-  if (err.name === 'NotFoundError' || err.statusCode === 404) {
-    return res.status(404).json({
-      error: 'Resource not found',
-      requestId: req.context?.requestId
-    });
-  }
-  
-  // Server errors (5xx) - don't expose internal details
-  res.status(500).json({
-    error: 'Internal server error',
-    requestId: req.context?.requestId
-    // Don't send stack trace or detailed error message in production
-  });
-}
+```python
+from fastapi import FastAPI, Request, status
+from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
+import logging
 
-// Usage - MUST be last
-app.use(errorHandlerMiddleware);
+app = FastAPI()
+logger = logging.getLogger(__name__)
+
+# Custom error classes
+class BusinessError(Exception):
+    def __init__(self, message: str, code: str, status_code: int = 400):
+        self.message = message
+        self.code = code
+        self.status_code = status_code
+        super().__init__(self.message)
+
+class UnauthorizedError(Exception):
+    pass
+
+class ForbiddenError(Exception):
+    pass
+
+class NotFoundError(Exception):
+    pass
+
+# Exception handlers
+@app.exception_handler(BusinessError)
+async def business_error_handler(request: Request, exc: BusinessError):
+    request_id = getattr(request.state, 'request_id', 'unknown')
+    logger.warning(f"[{request_id}] Business error: {exc.message}")
+    
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "error": exc.message,
+            "code": exc.code,
+            "request_id": request_id
+        }
+    )
+
+@app.exception_handler(UnauthorizedError)
+async def unauthorized_error_handler(request: Request, exc: UnauthorizedError):
+    request_id = getattr(request.state, 'request_id', 'unknown')
+    return JSONResponse(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        content={"error": "Unauthorized", "request_id": request_id}
+    )
+
+@app.exception_handler(ForbiddenError)
+async def forbidden_error_handler(request: Request, exc: ForbiddenError):
+    request_id = getattr(request.state, 'request_id', 'unknown')
+    return JSONResponse(
+        status_code=status.HTTP_403_FORBIDDEN,
+        content={"error": "Forbidden", "request_id": request_id}
+    )
+
+@app.exception_handler(NotFoundError)
+async def not_found_error_handler(request: Request, exc: NotFoundError):
+    request_id = getattr(request.state, 'request_id', 'unknown')
+    return JSONResponse(
+        status_code=status.HTTP_404_NOT_FOUND,
+        content={"error": "Resource not found", "request_id": request_id}
+    )
+
+@app.exception_handler(RequestValidationError)
+async def validation_error_handler(request: Request, exc: RequestValidationError):
+    request_id = getattr(request.state, 'request_id', 'unknown')
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content={
+            "error": "Validation failed",
+            "details": exc.errors(),
+            "request_id": request_id
+        }
+    )
+
+@app.exception_handler(Exception)
+async def general_exception_handler(request: Request, exc: Exception):
+    request_id = getattr(request.state, 'request_id', 'unknown')
+    
+    # Log server errors
+    logger.error(f"[{request_id}] Internal error: {str(exc)}", exc_info=True)
+    
+    # Don't expose internal details in production
+    return JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content={
+            "error": "Internal server error",
+            "request_id": request_id
+        }
+    )
 ```
 
 **Advanced Error Handler:**
@@ -1882,45 +2181,58 @@ function errorHandlerMiddleware(err, req, res, next) {
 
 **When:** After parsing, before handler
 
-```javascript
-const Joi = require('joi');
+```python
+# In FastAPI, validation is typically done via Pydantic models
+from pydantic import BaseModel, Field, validator
+from typing import Optional
+from datetime import datetime
 
-// Create validation middleware factory
-function validate(schema) {
-  return (req, res, next) => {
-    const { error, value } = schema.validate(req.body, {
-      abortEarly: false, // Collect all errors
-      stripUnknown: true // Remove unknown fields
-    });
+class CreateBookSchema(BaseModel):
+    title: str = Field(..., min_length=3, max_length=200)
+    author: str = Field(..., min_length=2, max_length=100)
+    isbn: Optional[str] = Field(None, regex=r'^978-\d{10}$')
+    published_year: Optional[int] = Field(None, ge=1000)
     
-    if (error) {
-      const validationErrors = error.details.map(detail => ({
-        field: detail.path.join('.'),
-        message: detail.message
-      }));
-      
-      return res.status(400).json({
-        error: 'Validation failed',
-        validationErrors
-      });
-    }
+    @validator('published_year')
+    def validate_published_year(cls, v):
+        if v and v > datetime.now().year:
+            raise ValueError(f'Year cannot be in the future')
+        return v
     
-    // Replace req.body with validated and transformed data
-    req.body = value;
-    next();
-  };
-}
+    @validator('title', 'author')
+    def strip_strings(cls, v):
+        return v.strip() if v else v
 
-// Define schemas
-const createBookSchema = Joi.object({
-  title: Joi.string().min(3).max(200).required(),
-  author: Joi.string().min(2).max(100).required(),
-  isbn: Joi.string().pattern(/^978-\d{10}$/).optional(),
-  publishedYear: Joi.number().integer().min(1000).max(new Date().getFullYear()).optional()
-});
+# Use in route - FastAPI validates automatically
+@app.post("/api/books")
+async def create_book(book: CreateBookSchema):
+    # book is already validated and transformed
+    return {"message": "Book created", "data": book.dict()}
 
-// Use in route
-app.post('/api/books', validate(createBookSchema), createBookHandler);
+# For custom validation with better error messages
+from fastapi import HTTPException
+
+class CreateBookRequest(BaseModel):
+    title: str
+    author: str
+    isbn: Optional[str] = None
+    published_year: Optional[int] = None
+    
+    class Config:
+        # Automatically strip whitespace
+        anystr_strip_whitespace = True
+    
+    @validator('title')
+    def validate_title(cls, v):
+        if len(v) < 3 or len(v) > 200:
+            raise ValueError('Title must be between 3 and 200 characters')
+        return v
+    
+    @validator('author')
+    def validate_author(cls, v):
+        if len(v) < 2 or len(v) > 100:
+            raise ValueError('Author must be between 2 and 100 characters')
+        return v
 ```
 
 ### Middleware Ordering
@@ -1929,53 +2241,68 @@ app.post('/api/books', validate(createBookSchema), createBookHandler);
 
 #### ❌ Wrong Order
 
-```javascript
-// WRONG - handler won't have access to parsed body
-app.post('/api/books', createBookHandler);
-app.use(express.json()); // Too late!
+```python
+# WRONG - Validators cannot access parsed body if it's added after
+@app.post('/api/books')
+async def create_book(book: CreateBookRequest):
+    pass
 
-// WRONG - authentication happens after handler
-app.get('/api/protected', protectedHandler);
-app.use(authMiddleware); // Too late!
+# Too late to add JSON parsing - FastAPI does this automatically
+
+# WRONG - authentication middleware added after route
+# In FastAPI, use dependencies for route-specific auth
 ```
 
 #### ✅ Correct Order
 
-```javascript
-// 1. Request ID (first - needed for logging)
-app.use(requestIdMiddleware);
+```python
+from fastapi import FastAPI, Depends
+from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.gzip import GZipMiddleware
 
-// 2. CORS (early - might terminate request)
-app.use(corsMiddleware);
+app = FastAPI()
 
-// 3. Security headers
-app.use(helmet());
+# 1. Request ID (first - needed for logging)
+app.add_middleware(RequestIDMiddleware)
 
-// 4. Logging (after request ID and CORS)
-app.use(loggingMiddleware);
+# 2. CORS (early - might terminate request)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://example.com"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-// 5. Body parsing (before handlers need req.body)
-app.use(express.json());
+# 3. Security headers
+app.add_middleware(SecurityHeadersMiddleware)
 
-// 6. Rate limiting
-app.use(rateLimitMiddleware);
+# 4. Logging (after request ID and CORS)
+app.add_middleware(LoggingMiddleware)
 
-// 7. Compression (can be early or late)
-app.use(compression());
+# 5. Rate limiting
+app.add_middleware(CustomRateLimitMiddleware)
 
-// 8. Routes and handlers
-app.use('/api/public', publicRoutes); // No auth needed
+# 6. Compression
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
-app.use('/api/protected', authMiddleware); // Auth for protected routes
-app.use('/api/protected', protectedRoutes);
+# 7. Routes with dependencies for auth
+@app.get("/api/public/books")
+async def get_public_books():
+    return {"books": []}
 
-// 9. 404 handler (after all routes)
-app.use((req, res) => {
-  res.status(404).json({ error: 'Route not found' });
-});
+# Use dependency for auth (applied per route)
+@app.get("/api/protected/books")
+async def get_protected_books(user: dict = Depends(verify_token)):
+    return {"books": [], "user_id": user['user_id']}
 
-// 10. Error handler (LAST - catches all errors)
-app.use(errorHandlerMiddleware);
+# 8. Exception handlers (registered, not middleware)
+@app.exception_handler(Exception)
+async def general_exception_handler(request, exc):
+    return JSONResponse(
+        status_code=500,
+        content={"error": "Internal server error"}
+    )
 ```
 
 **Visual Flow:**
@@ -2044,113 +2371,135 @@ Request context is a **storage mechanism** that allows you to attach data to a s
 
 #### Problem Without Context
 
-```javascript
-// Authentication middleware extracts user ID
-function authMiddleware(req, res, next) {
-  const userId = verifyToken(req.headers.authorization);
-  // How do we pass this to the handler?
-  next();
-}
+```python
+# Authentication middleware extracts user ID
+from fastapi import Request
+from starlette.middleware.base import BaseHTTPMiddleware
 
-// Handler needs user ID - but how to get it?
-function createBookHandler(req, res) {
-  const userId = ???; // Where does this come from?
-  // ...
-}
+class AuthMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        user_id = verify_token(request.headers.get('authorization'))
+        # How do we pass this to the handler?
+        response = await call_next(request)
+        return response
+
+# Handler needs user ID - but how to get it?
+@app.post("/api/books")
+async def create_book_handler(book_data: dict):
+    user_id = ???  # Where does this come from?
+    # ...
 ```
 
 **Bad Solutions:**
 
-```javascript
-// ❌ Global variable - breaks with concurrent requests
-let currentUserId;
+```python
+# ❌ Global variable - breaks with concurrent requests
+current_user_id = None
 
-function authMiddleware(req, res, next) {
-  currentUserId = verifyToken(req.headers.authorization);
-  next();
-}
+class AuthMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        global current_user_id
+        current_user_id = verify_token(request.headers.get('authorization'))
+        response = await call_next(request)
+        return response
 
-// ❌ Attach to req directly - can conflict with Express properties
-function authMiddleware(req, res, next) {
-  req.userId = verifyToken(req.headers.authorization);
-  next();
-}
-
-// ❌ Pass as parameter - tightly couples components
-function authMiddleware(req, res, next) {
-  const userId = verifyToken(req.headers.authorization);
-  next(userId); // next() doesn't work this way
-}
+# ❌ Modifying request directly without state - not recommended
+class AuthMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        request.user_id = verify_token(request.headers.get('authorization'))
+        response = await call_next(request)
+        return response
 ```
 
 #### ✅ Solution: Request Context
 
-```javascript
-// Authentication middleware stores user in context
-function authMiddleware(req, res, next) {
-  const userId = verifyToken(req.headers.authorization);
-  
-  // Create or use existing context
-  req.context = req.context || {};
-  req.context.userId = userId;
-  req.context.userRole = 'user';
-  
-  next();
-}
+```python
+# Authentication middleware stores user in state
+from fastapi import Request
+from starlette.middleware.base import BaseHTTPMiddleware
 
-// Handler retrieves user from context
-function createBookHandler(req, res) {
-  const userId = req.context.userId; // Available!
-  const userRole = req.context.userRole; // Available!
-  // ...
-}
+class AuthMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        user_id = verify_token(request.headers.get('authorization'))
+        
+        # Store in request state (FastAPI's context mechanism)
+        request.state.user_id = user_id
+        request.state.user_role = 'user'
+        
+        response = await call_next(request)
+        return response
+
+# Handler retrieves user from state
+@app.post("/api/books")
+async def create_book_handler(book_data: dict, request: Request):
+    user_id = request.state.user_id  # Available!
+    user_role = request.state.user_role  # Available!
+    # ...
 ```
 
 ### How It Works
 
-Request context is typically implemented as a **key-value store** attached to the request object.
+Request context is typically implemented using FastAPI's **request.state** object.
 
-#### Basic Implementation (Node.js)
+#### Basic Implementation (FastAPI)
 
-```javascript
-// Context initialization middleware
-function initContextMiddleware(req, res, next) {
-  req.context = {
-    requestId: generateRequestId(),
-    startTime: Date.now()
-  };
-  next();
-}
+```python
+from fastapi import Request
+from starlette.middleware.base import BaseHTTPMiddleware
+import time
+import uuid
 
-// Use context in other middleware
-function authMiddleware(req, res, next) {
-  const token = req.headers.authorization;
-  const decoded = jwt.verify(token, SECRET);
-  
-  // Add to context
-  req.context.userId = decoded.userId;
-  req.context.userRole = decoded.role;
-  req.context.permissions = decoded.permissions;
-  
-  next();
-}
+# Context initialization middleware
+class InitContextMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        request.state.request_id = str(uuid.uuid4())
+        request.state.start_time = time.time()
+        
+        response = await call_next(request)
+        return response
 
-// Use context in handlers
-function createBookHandler(req, res) {
-  const { userId, userRole } = req.context;
-  // Use the data
-}
+# Use context in other middleware
+class AuthMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        token = request.headers.get('authorization')
+        decoded = verify_jwt(token, SECRET)
+        
+        # Add to state
+        request.state.user_id = decoded['user_id']
+        request.state.user_role = decoded['role']
+        request.state.permissions = decoded.get('permissions', [])
+        
+        response = await call_next(request)
+        return response
+
+# Use context in handlers
+@app.post("/api/books")
+async def create_book_handler(book_data: dict, request: Request):
+    user_id = request.state.user_id
+    user_role = request.state.user_role
+    # Use the data
+    pass
 ```
 
 #### Implementation in Different Languages
 
-**Node.js (Express):**
-```javascript
-// Simple object attached to req
-req.context = {
-  requestId: 'abc-123',
-  userId: 'user-456'
-};
+**Python (FastAPI):**
+```python
+# FastAPI uses request.state for request-scoped storage
+from fastapi import Request
+
+@app.middleware("http")
+async def add_context(request: Request, call_next):
+    request.state.request_id = 'abc-123'
+    request.state.user_id = 'user-456'
+    response = await call_next(request)
+    return response
+
+# Access in handler
+@app.get("/books")
+async def get_books(request: Request):
+    user_id = request.state.user_id
+    return {"user_id": user_id}
 ```
 
 **Go (using context package):**
@@ -2164,20 +2513,13 @@ ctx := context.WithValue(r.Context(), "userId", userID)
 userId := ctx.Value("userId").(string)
 ```
 
-**Python (FastAPI):**
-```python
-from starlette.middleware.base import BaseHTTPMiddleware
-
-class ContextMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request, call_next):
-        request.state.user_id = "user-123"
-        response = await call_next(request)
-        return response
-
-# Access in handler
-@app.get("/books")
-async def get_books(request: Request):
-    user_id = request.state.user_id
+**Node.js (Express):**
+```javascript
+// Simple object attached to req
+req.context = {
+  requestId: 'abc-123',
+  userId: 'user-456'
+};
 ```
 
 ### Common Use Cases
@@ -2186,57 +2528,71 @@ async def get_books(request: Request):
 
 Store authenticated user information for use throughout the request.
 
-```javascript
-// Auth middleware
-function authMiddleware(req, res, next) {
-  const token = req.headers.authorization?.replace('Bearer ', '');
-  
-  if (!token) {
-    return res.status(401).json({ error: 'No token' });
-  }
-  
-  try {
-    const decoded = jwt.verify(token, SECRET);
-    
-    // Store in context
-    req.context = req.context || {};
-    req.context.userId = decoded.userId;
-    req.context.userEmail = decoded.email;
-    req.context.userRole = decoded.role;
-    req.context.permissions = decoded.permissions || [];
-    req.context.isAuthenticated = true;
-    
-    next();
-  } catch (error) {
-    res.status(401).json({ error: 'Invalid token' });
-  }
-}
+```python
+from fastapi import Request, HTTPException, status
+from starlette.middleware.base import BaseHTTPMiddleware
+from jose import jwt, JWTError
+import os
 
-// Handler uses auth data
-async function createBookHandler(req, res) {
-  const { userId, userRole } = req.context;
-  
-  const book = {
-    ...req.body,
-    userId, // From context, not from client (security!)
-    createdAt: new Date()
-  };
-  
-  await bookRepository.insert(book);
-  res.status(201).json(book);
-}
+# Auth middleware
+class AuthMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        token = request.headers.get('authorization', '').replace('Bearer ', '')
+        
+        if not token:
+            return JSONResponse(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                content={"error": "No token"}
+            )
+        
+        try:
+            decoded = jwt.decode(token, os.getenv('JWT_SECRET'), algorithms=["HS256"])
+            
+            # Store in state
+            request.state.user_id = decoded.get('user_id')
+            request.state.user_email = decoded.get('email')
+            request.state.user_role = decoded.get('role')
+            request.state.permissions = decoded.get('permissions', [])
+            request.state.is_authenticated = True
+            
+            response = await call_next(request)
+            return response
+        except JWTError:
+            return JSONResponse(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                content={"error": "Invalid token"}
+            )
 
-// Another handler checks permissions
-async function deleteBookHandler(req, res) {
-  const { userId, userRole, permissions } = req.context;
-  
-  if (userRole !== 'admin' && !permissions.includes('delete:books')) {
-    return res.status(403).json({ error: 'Forbidden' });
-  }
-  
-  await bookRepository.delete(req.params.id);
-  res.status(204).send();
-}
+# Handler uses auth data
+@app.post("/api/books")
+async def create_book_handler(book_data: dict, request: Request):
+    user_id = request.state.user_id
+    user_role = request.state.user_role
+    
+    book = {
+        **book_data,
+        "user_id": user_id,  # From state, not from client (security!)
+        "created_at": datetime.now()
+    }
+    
+    await book_repository.insert(book)
+    return book
+
+# Another handler checks permissions
+@app.delete("/api/books/{book_id}")
+async def delete_book_handler(book_id: str, request: Request):
+    user_id = request.state.user_id
+    user_role = request.state.user_role
+    permissions = request.state.permissions
+    
+    if user_role != 'admin' and 'delete:books' not in permissions:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Forbidden"
+        )
+    
+    await book_repository.delete(book_id)
+    return {"message": "Deleted"}
 ```
 
 #### 2. Request Tracking
@@ -2519,29 +2875,231 @@ Content-Type: application/json
 
 ### Step-by-Step Flow
 
-```javascript
-// ============================================
-// 1. REQUEST ARRIVES
-// ============================================
+```python
+# ============================================
+# 1. REQUEST ARRIVES
+# ============================================
 
-// 2. Request ID Middleware
-function requestIdMiddleware(req, res, next) {
-  req.context = { requestId: uuidv4() };
-  res.setHeader('X-Request-ID', req.context.requestId);
-  next(); // → Continue to next middleware
+# 2. Request ID Middleware
+class RequestIDMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        request.state.request_id = str(uuid.uuid4())
+        response = await call_next(request)
+        response.headers['X-Request-ID'] = request.state.request_id
+        return response  # → Continue to next middleware
+
+# 3. CORS Middleware (FastAPI built-in)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://example.com"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# 4. Logging Middleware
+class LoggingMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        request_id = request.state.request_id
+        logger.info(f"[{request_id}] POST /api/books")
+        response = await call_next(request)
+        return response  # → Continue
+
+# 5. Body Parser (automatic in FastAPI via Pydantic)
+# req.body is automatically parsed to Python dict
+
+# 6. Rate Limit Middleware
+class RateLimitMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        ip = request.client.host
+        count = get_rate_limit_count(ip)
+        
+        if count > 100:
+            return JSONResponse(
+                status_code=429,
+                content={"error": "Too many requests"}
+            )
+            # ❌ Request TERMINATED here
+        
+        increment_rate_limit_count(ip)
+        response = await call_next(request)
+        return response  # → Continue
+
+# 7. ROUTING
+# FastAPI routes POST /api/books to handler
+
+# 8. Authentication Middleware (as dependency)
+from fastapi import Depends
+
+async def verify_token(request: Request, authorization: str = Header(None)):
+    token = authorization.replace('Bearer ', '') if authorization else None
+    
+    if not token:
+        raise HTTPException(status_code=401, detail="No token")
+        # ❌ Would TERMINATE here if no token
+    
+    try:
+        decoded = jwt.decode(token, SECRET, algorithms=["HS256"])
+        request.state.user_id = decoded['user_id']
+        request.state.user_role = decoded['role']
+        return decoded  # → Continue
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+        # ❌ Would TERMINATE here if invalid
+
+# 9. Validation (automatic via Pydantic)
+class CreateBookRequest(BaseModel):
+    title: str = Field(..., min_length=1)
+    author: str = Field(..., min_length=1)
+    isbn: str
+    
+    @validator('*')
+    def validate_fields(cls, v):
+        if not v:
+            raise ValueError('Field is required')
+        return v
+
+# ============================================
+# 10. HANDLER
+# ============================================
+@app.post("/api/books", status_code=status.HTTP_201_CREATED)
+async def create_book_handler(
+    book_data: CreateBookRequest,
+    request: Request,
+    user_data: dict = Depends(verify_token)
+):
+    try:
+        # Extract data (done by Pydantic)
+        user_id = request.state.user_id
+        user_role = request.state.user_role
+        
+        # Call service layer
+        book = await book_service.create_book(
+            title=book_data.title,
+            author=book_data.author,
+            isbn=book_data.isbn,
+            user_id=user_id
+        )
+        
+        # Send response
+        return book
+        
+    except ValueError as error:
+        # Pass error to exception handler
+        raise HTTPException(status_code=400, detail=str(error))
+
+# ============================================
+# 11. SERVICE LAYER
+# ============================================
+class BookService:
+    async def create_book(self, title: str, author: str, isbn: str, user_id: str):
+        # Business validation
+        if isbn and not is_valid_isbn(isbn):
+            raise ValueError("Invalid ISBN format")
+        
+        # Check for duplicates
+        existing = await self.book_repository.find_by_isbn(isbn)
+        if existing:
+            raise ValueError("Duplicate ISBN")
+        
+        # Create book object
+        book = {
+            "id": str(uuid.uuid4()),
+            "title": title.strip(),
+            "author": author.strip(),
+            "isbn": isbn,
+            "user_id": user_id,
+            "created_at": datetime.now(),
+            "updated_at": datetime.now()
+        }
+        
+        # Database operation
+        await self.book_repository.insert(book)
+        
+        # Update user's book count
+        await self.user_repository.increment_book_count(user_id)
+        
+        # Send email (async - don't wait)
+        try:
+            await self.email_service.send_book_created(user_id, book)
+        except Exception as e:
+            logger.error(f"Failed to send email: {e}")
+        
+        # Return result
+        return book
+
+# ============================================
+# 12. REPOSITORY LAYER
+# ============================================
+class BookRepository:
+    async def find_by_isbn(self, isbn: str):
+        query = 'SELECT * FROM books WHERE isbn = ?'
+        rows = await self.db.fetch_all(query, [isbn])
+        return self._map_row_to_book(rows[0]) if rows else None
+    
+    async def insert(self, book: dict):
+        query = '''
+            INSERT INTO books (id, title, author, isbn, user_id, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        '''
+        
+        await self.db.execute(query, [
+            book["id"],
+            book["title"],
+            book["author"],
+            book["isbn"],
+            book["user_id"],
+            book["created_at"],
+            book["updated_at"]
+        ])
+        
+        return book
+
+# ============================================
+# 13. RESPONSE SENT
+# ============================================
+# Handler returns:
+{
+    "id": "abc-123",
+    "title": "Clean Code",
+    "author": "Robert Martin",
+    "isbn": "978-0132350884",
+    "user_id": "user-456",
+    "created_at": "2026-01-30T10:00:00.000Z",
+    "updated_at": "2026-01-30T10:00:00.000Z"
 }
 
-// 3. CORS Middleware
-function corsMiddleware(req, res, next) {
-  const origin = req.headers.origin;
-  if (origin === 'https://example.com') {
-    res.setHeader('Access-Control-Allow-Origin', origin);
-  }
-  next(); // → Continue
-}
+# With headers:
+# HTTP/1.1 201 Created
+# X-Request-ID: abc-123-def-456
+# Content-Type: application/json
 
-// 4. Logging Middleware
-function loggingMiddleware(req, res, next) {
+# ============================================
+# 14. IF ERROR OCCURRED
+# ============================================
+# Exception handler catches it
+@app.exception_handler(ValueError)
+async def value_error_handler(request: Request, exc: ValueError):
+    request_id = getattr(request.state, 'request_id', 'unknown')
+    logger.error(f"[{request_id}] Error: {exc}")
+    
+    if "Duplicate ISBN" in str(exc):
+        return JSONResponse(
+            status_code=409,
+            content={
+                "error": str(exc),
+                "request_id": request_id
+            }
+        )
+    
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": "Internal server error",
+            "request_id": request_id
+        }
+    )
+```
   console.log(`[${req.context.requestId}] POST /api/books`);
   next(); // → Continue
 }
@@ -2876,154 +3434,167 @@ The **order ticket** (context) travels from waiter → kitchen → chefs and bac
 ### 1. Putting Business Logic in Handlers
 
 ❌ **Wrong:**
-```javascript
-async function createBookHandler(req, res) {
-  const { title, author, isbn } = req.body;
-  
-  // Business logic in handler - WRONG
-  if (isbn && isbn.length !== 13) {
-    return res.status(400).json({ error: 'Invalid ISBN' });
-  }
-  
-  // Database operation in handler - WRONG
-  await db.query('INSERT INTO books ...', [title, author, isbn]);
-  
-  res.status(201).json({ message: 'Created' });
-}
+```python
+@app.post("/api/books")
+async def create_book_handler(request: Request):
+    data = await request.json()
+    title = data.get('title')
+    author = data.get('author')
+    isbn = data.get('isbn')
+    
+    # Business logic in handler - WRONG
+    if isbn and len(isbn) != 13:
+        raise HTTPException(status_code=400, detail="Invalid ISBN")
+    
+    # Database operation in handler - WRONG
+    await db.execute('INSERT INTO books ...', [title, author, isbn])
+    
+    return {"message": "Created"}
 ```
 
 ✅ **Correct:**
-```javascript
-async function createBookHandler(req, res) {
-  const book = await bookService.createBook(req.body);
-  res.status(201).json(book);
-}
+```python
+@app.post("/api/books")
+async def create_book_handler(book_data: CreateBookRequest):
+    book = await book_service.create_book(book_data.dict())
+    return book
 
-async function createBook(data) {
-  // Business logic in service - CORRECT
-  if (data.isbn && !isValidISBN(data.isbn)) {
-    throw new ValidationError('Invalid ISBN');
-  }
-  
-  // Database via repository - CORRECT
-  return await bookRepository.insert(data);
-}
+class BookService:
+    async def create_book(self, data: dict):
+        # Business logic in service - CORRECT
+        if data.get('isbn') and not is_valid_isbn(data['isbn']):
+            raise ValidationError('Invalid ISBN')
+        
+        # Database via repository - CORRECT
+        return await self.book_repository.insert(data)
 ```
 
 ### 2. Service Layer Knowing About HTTP
 
 ❌ **Wrong:**
-```javascript
-async function createBook(req, res) {
-  // Service should not have req, res parameters
-  const book = { ...req.body };
-  
-  await bookRepository.insert(book);
-  
-  // Service should not send responses
-  res.status(201).json(book);
-}
+```python
+from fastapi.responses import JSONResponse
+
+class BookService:
+    # Service should not have response parameters
+    async def create_book(self, data: dict, response: JSONResponse):
+        book = {**data, "id": str(uuid.uuid4())}
+        
+        await self.book_repository.insert(book)
+        
+        # Service shouldn't handle responses
+        response.status_code = 201  # ❌
+        return book
 ```
 
 ✅ **Correct:**
-```javascript
-async function createBook(data) {
-  // Just returns data, no HTTP
-  const book = { ...data, id: generateId() };
-  await bookRepository.insert(book);
-  return book;
-}
+```python
+class BookService:
+    # Just returns data, no HTTP
+    async def create_book(self, data: dict):
+        book = {**data, "id": str(uuid.uuid4())}
+        await self.book_repository.insert(book)
+        return book  # ✅ Handler decides what HTTP response to send
 ```
 
 ### 3. Repository Containing Business Logic
 
 ❌ **Wrong:**
-```javascript
-async function insert(book) {
-  // Business validation in repository - WRONG
-  if (book.publishedYear > new Date().getFullYear()) {
-    throw new Error('Future year not allowed');
-  }
-  
-  // Complex business logic - WRONG
-  if (book.isbn) {
-    const existing = await this.findByISBN(book.isbn);
-    if (existing) {
-      throw new Error('Duplicate');
-    }
-  }
-  
-  await db.query('INSERT ...');
-}
+```python
+class BookRepository:
+    async def insert(self, book: dict):
+        # Business validation in repository - WRONG
+        if book.get("published_year", 0) > datetime.now().year:
+            raise ValueError('Future year not allowed')
+        
+        # Complex business logic - WRONG
+        if book.get("isbn"):
+            existing = await self.find_by_isbn(book["isbn"])
+            if existing:
+                raise ValueError('Duplicate')
+        
+        await self.db.execute('INSERT ...')
 ```
 
 ✅ **Correct:**
-```javascript
-// Repository just does database operations
-async function insert(book) {
-  const query = 'INSERT INTO books (id, title, author) VALUES (?, ?, ?)';
-  await db.query(query, [book.id, book.title, book.author]);
-}
+```python
+# Repository just does database operations
+class BookRepository:
+    async def insert(self, book: dict):
+        query = 'INSERT INTO books (id, title, author) VALUES (?, ?, ?)'
+        await self.db.execute(query, [book["id"], book["title"], book["author"]])
 
-// Business logic in service
-async function createBook(data) {
-  if (data.publishedYear > new Date().getFullYear()) {
-    throw new ValidationError('Future year not allowed');
-  }
-  
-  if (data.isbn) {
-    const existing = await bookRepository.findByISBN(data.isbn);
-    if (existing) {
-      throw new DuplicateError('ISBN already exists');
-    }
-  }
-  
-  await bookRepository.insert(data);
-}
+# Business logic in service
+class BookService:
+    async def create_book(self, data: dict):
+        if data.get("published_year", 0) > datetime.now().year:
+            raise ValidationError('Future year not allowed')
+        
+        if data.get("isbn"):
+            existing = await self.book_repository.find_by_isbn(data["isbn"])
+            if existing:
+                raise DuplicateError('ISBN already exists')
+        
+        await self.book_repository.insert(data)
 ```
 
 ### 4. Wrong Middleware Order
 
 ❌ **Wrong:**
-```javascript
-// Auth before body parser - won't work
-app.use(authMiddleware);
-app.use(express.json());
+```python
+# In FastAPI, middleware is applied in reverse order
+# This example shows conceptual wrong order
 
-// Error handler not last - won't catch errors
-app.use(errorHandler);
-app.use('/api/books', bookRoutes);
+# Auth before initialization - handlers won't have state
+app.add_middleware(AuthMiddleware)
+app.add_middleware(InitContextMiddleware)
+
+# Error handler not configured properly
+# (In FastAPI, use exception_handler decorator instead)
 ```
 
 ✅ **Correct:**
-```javascript
-app.use(express.json()); // Parse body first
-app.use(authMiddleware); // Then auth
-// ... routes
-app.use(errorHandler); // Error handler LAST
+```python
+from fastapi import FastAPI
+
+app = FastAPI()
+
+# Correct order (last added = first executed in FastAPI)
+app.add_middleware(LoggingMiddleware)  # Executes 3rd
+app.add_middleware(AuthMiddleware)  # Executes 2nd  
+app.add_middleware(InitContextMiddleware)  # Executes 1st
+
+# Exception handlers registered separately
+@app.exception_handler(Exception)
+async def exception_handler(request, exc):
+    return JSONResponse(status_code=500, content={"error": str(exc)})
 ```
 
 ### 5. Not Handling Errors Properly
 
 ❌ **Wrong:**
-```javascript
-async function handler(req, res) {
-  const book = await bookService.createBook(req.body);
-  res.json(book);
-  // No try-catch - unhandled promise rejection
-}
+```python
+@app.post("/api/books")
+async def handler(book_data: CreateBookRequest):
+    book = await book_service.create_book(book_data.dict())
+    return book
+    # No try-except - unhandled exceptions
 ```
 
 ✅ **Correct:**
-```javascript
-async function handler(req, res, next) {
-  try {
-    const book = await bookService.createBook(req.body);
-    res.json(book);
-  } catch (error) {
-    next(error); // Pass to error handler
-  }
-}
+```python
+@app.post("/api/books")
+async def handler(book_data: CreateBookRequest):
+    try:
+        book = await book_service.create_book(book_data.dict())
+        return book
+    except ValueError as error:
+        # Handle specific errors
+        raise HTTPException(status_code=400, detail=str(error))
+    except Exception as error:
+        # Handle unexpected errors
+        logger.error(f"Unexpected error: {error}")
+        raise HTTPException(status_code=500, detail="Internal server error")
 ```
 
 ### 6. Storing Too Much in Context
@@ -3115,88 +3686,117 @@ async function findAll({ sort, limit }) { }
 ### Handler/Controller Best Practices
 
 1. **Keep handlers thin** - delegate to services
-2. **Always handle errors** - use try-catch or .catch()
+2. **Always handle errors** - use try-except
 3. **Validate early** - reject bad data immediately
 4. **Use appropriate HTTP status codes**
 5. **Don't trust client data** - always validate
-6. **Extract user info from context** - never from request body
+6. **Extract user info from state** - never from request body
 
-```javascript
-async function createBookHandler(req, res, next) {
-  try {
-    // 1. Extract data
-    const data = req.body;
-    const userId = req.context.userId; // From auth, not from client
-    
-    // 2. Basic validation
-    if (!data.title) {
-      return res.status(400).json({ error: 'Title required' });
-    }
-    
-    // 3. Call service
-    const book = await bookService.createBook({ ...data, userId });
-    
-    // 4. Send appropriate response
-    res.status(201).json(book);
-    
-  } catch (error) {
-    next(error); // Let error handler deal with it
-  }
-}
+```python
+from fastapi import APIRouter, HTTPException, Request, status
+from pydantic import BaseModel
+
+router = APIRouter()
+
+class CreateBookRequest(BaseModel):
+    title: str
+    author: str
+
+@router.post("/api/books", status_code=status.HTTP_201_CREATED)
+async def create_book_handler(book_data: CreateBookRequest, request: Request):
+    try:
+        # 1. Extract data (done by Pydantic)
+        user_id = request.state.user_id  # From auth, not from client
+        
+        # 2. Basic validation (done by Pydantic)
+        if not book_data.title:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Title required"
+            )
+        
+        # 3. Call service
+        book = await book_service.create_book(
+            **book_data.dict(),
+            user_id=user_id
+        )
+        
+        # 4. Send appropriate response
+        return book
+        
+    except ValueError as error:
+        # Let exception handler deal with it
+        raise HTTPException(status_code=400, detail=str(error))
 ```
 
 ### Service Layer Best Practices
 
 1. **No HTTP dependencies** - should work in CLI, cron jobs, etc.
 2. **Single responsibility** - one method does one thing
-3. **Throw meaningful errors** - with error codes
+3. **Raise meaningful errors** - with error codes
 4. **Orchestrate operations** - coordinate repositories
 5. **Handle transactions** - ensure data consistency
 
-```javascript
-class BookService {
-  async createBook({ title, author, isbn, userId }) {
-    // Business validation
-    this.validateBookData({ title, author, isbn });
+```python
+from typing import Dict
+import uuid
+from datetime import datetime
+
+class ValidationError(Exception):
+    def __init__(self, message: str):
+        self.message = message
+        super().__init__(self.message)
+
+class DuplicateError(Exception):
+    def __init__(self, message: str):
+        self.message = message
+        super().__init__(self.message)
+
+class BookService:
+    def __init__(self, book_repository, user_repository):
+        self.book_repository = book_repository
+        self.user_repository = user_repository
     
-    // Check duplicates
-    await this.ensureNoDuplicate(isbn);
+    async def create_book(self, title: str, author: str, isbn: str, user_id: str) -> Dict:
+        # Business validation
+        await self._validate_book_data(title=title, author=author, isbn=isbn)
+        
+        # Check duplicates
+        await self._ensure_no_duplicate(isbn)
+        
+        # Create book
+        book = {
+            "id": str(uuid.uuid4()),
+            "title": title.strip(),
+            "author": author.strip(),
+            "isbn": isbn,
+            "user_id": user_id,
+            "created_at": datetime.now()
+        }
+        
+        # Persist
+        await self.book_repository.insert(book)
+        
+        # Side effects
+        await self._update_user_stats(user_id)
+        
+        return book
     
-    // Create book
-    const book = {
-      id: generateId(),
-      title: title.trim(),
-      author: author.trim(),
-      isbn,
-      userId,
-      createdAt: new Date()
-    };
+    async def _validate_book_data(self, title: str, author: str, isbn: str):
+        if not title or len(title) < 3:
+            raise ValidationError('Title must be at least 3 characters')
+        # ...
     
-    // Persist
-    await bookRepository.insert(book);
+    async def _ensure_no_duplicate(self, isbn: str):
+        if not isbn:
+            return
+        
+        existing = await self.book_repository.find_by_isbn(isbn)
+        if existing:
+            raise DuplicateError('Book with this ISBN already exists')
     
-    // Side effects
-    await this.updateUserStats(userId);
-    
-    return book;
-  }
-  
-  validateBookData(data) {
-    if (!data.title || data.title.length < 3) {
-      throw new ValidationError('Title must be at least 3 characters');
-    }
-    // ...
-  }
-  
-  async ensureNoDuplicate(isbn) {
-    if (!isbn) return;
-    
-    const existing = await bookRepository.findByISBN(isbn);
-    if (existing) {
-      throw new DuplicateError('Book with this ISBN already exists');
-    }
-  }
-}
+    async def _update_user_stats(self, user_id: str):
+        await self.user_repository.increment_book_count(user_id)
 ```
 
 ### Repository Best Practices
@@ -3207,49 +3807,49 @@ class BookService {
 4. **Use parameterized queries** - prevent SQL injection
 5. **Map database rows to objects** - encapsulate mapping logic
 
-```javascript
-class BookRepository {
-  async findById(id) {
-    const query = 'SELECT * FROM books WHERE id = ? AND deleted_at IS NULL';
-    const rows = await db.query(query, [id]);
-    return rows.length > 0 ? this.mapRow(rows[0]) : null;
-  }
-  
-  async findByISBN(isbn) {
-    const query = 'SELECT * FROM books WHERE isbn = ? AND deleted_at IS NULL';
-    const rows = await db.query(query, [isbn]);
-    return rows.length > 0 ? this.mapRow(rows[0]) : null;
-  }
-  
-  async insert(book) {
-    const query = `
-      INSERT INTO books (id, title, author, isbn, user_id, created_at)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `;
+```python
+from typing import Optional, Dict, List
+
+class BookRepository:
+    def __init__(self, db):
+        self.db = db
     
-    await db.query(query, [
-      book.id,
-      book.title,
-      book.author,
-      book.isbn,
-      book.userId,
-      book.createdAt
-    ]);
+    async def find_by_id(self, book_id: str) -> Optional[Dict]:
+        query = 'SELECT * FROM books WHERE id = ? AND deleted_at IS NULL'
+        rows = await self.db.fetch_all(query, [book_id])
+        return self._map_row(rows[0]) if rows else None
     
-    return book;
-  }
-  
-  mapRow(row) {
-    return {
-      id: row.id,
-      title: row.title,
-      author: row.author,
-      isbn: row.isbn,
-      userId: row.user_id,
-      createdAt: row.created_at
-    };
-  }
-}
+    async def find_by_isbn(self, isbn: str) -> Optional[Dict]:
+        query = 'SELECT * FROM books WHERE isbn = ? AND deleted_at IS NULL'
+        rows = await self.db.fetch_all(query, [isbn])
+        return self._map_row(rows[0]) if rows else None
+    
+    async def insert(self, book: Dict) -> Dict:
+        query = '''
+            INSERT INTO books (id, title, author, isbn, user_id, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+        '''
+        
+        await self.db.execute(query, [
+            book["id"],
+            book["title"],
+            book["author"],
+            book.get("isbn"),
+            book["user_id"],
+            book["created_at"]
+        ])
+        
+        return book
+    
+    def _map_row(self, row) -> Dict:
+        return {
+            "id": row["id"],
+            "title": row["title"],
+            "author": row["author"],
+            "isbn": row["isbn"],
+            "user_id": row["user_id"],
+            "created_at": row["created_at"]
+        }
 ```
 
 ### Middleware Best Practices
@@ -3472,58 +4072,67 @@ function errorHandler(err, req, res, next) {
 
 ### Complete Example (All Together)
 
-```javascript
-// ===== MIDDLEWARE =====
-app.use(initContext);
-app.use(cors);
-app.use(express.json());
-app.use(logging);
+```python
+# ===== MIDDLEWARE =====
+app.add_middleware(InitContextMiddleware)
+app.add_middleware(CORSMiddleware, allow_origins=["*"])
+app.add_middleware(LoggingMiddleware)
 
-// ===== ROUTES =====
-app.post('/api/books', 
-  authMiddleware,
-  validate(createBookSchema),
-  createBookHandler
-);
+# ===== ROUTES =====
+@app.post("/api/books", status_code=status.HTTP_201_CREATED)
+async def create_book_route(
+    book_data: CreateBookRequest,
+    request: Request,
+    user: dict = Depends(verify_token)
+):
+    return await create_book_handler(book_data, request)
 
-// ===== HANDLER =====
-async function createBookHandler(req, res, next) {
-  try {
-    const { userId } = req.context;
-    const book = await bookService.createBook({ ...req.body, userId });
-    res.status(201).json(book);
-  } catch (error) {
-    next(error);
-  }
-}
+# ===== HANDLER =====
+async def create_book_handler(book_data: CreateBookRequest, request: Request):
+    try:
+        user_id = request.state.user_id
+        book = await book_service.create_book(**book_data.dict(), user_id=user_id)
+        return book
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error))
 
-// ===== SERVICE =====
-async function createBook(data) {
-  if (data.isbn) {
-    const exists = await bookRepository.findByISBN(data.isbn);
-    if (exists) throw new DuplicateError('ISBN exists');
-  }
-  
-  const book = { id: generateId(), ...data, createdAt: new Date() };
-  await bookRepository.insert(book);
-  return book;
-}
+# ===== SERVICE =====
+class BookService:
+    async def create_book(self, title: str, author: str, isbn: str, user_id: str):
+        if isbn:
+            exists = await self.book_repository.find_by_isbn(isbn)
+            if exists:
+                raise ValueError('ISBN exists')
+        
+        book = {
+            "id": str(uuid.uuid4()),
+            "title": title.strip(),
+            "author": author.strip(),
+            "isbn": isbn,
+            "user_id": user_id,
+            "created_at": datetime.now()
+        }
+        await self.book_repository.insert(book)
+        return book
 
-// ===== REPOSITORY =====
-async function insert(book) {
-  const query = 'INSERT INTO books (id, title, author) VALUES (?, ?, ?)';
-  await db.query(query, [book.id, book.title, book.author]);
-  return book;
-}
+# ===== REPOSITORY =====
+class BookRepository:
+    async def insert(self, book: dict):
+        query = 'INSERT INTO books (id, title, author) VALUES (?, ?, ?)'
+        await self.db.execute(query, [book["id"], book["title"], book["author"]])
+        return book
 
-// ===== ERROR HANDLER =====
-app.use((err, req, res, next) => {
-  const status = err.statusCode || 500;
-  res.status(status).json({ 
-    error: err.message,
-    requestId: req.context.requestId 
-  });
-});
+# ===== ERROR HANDLER =====
+@app.exception_handler(ValueError)
+async def value_error_handler(request: Request, exc: ValueError):
+    request_id = getattr(request.state, 'request_id', 'unknown')
+    return JSONResponse(
+        status_code=400,
+        content={
+            "error": str(exc),
+            "request_id": request_id
+        }
+    )
 ```
 
 ### Key Takeaways

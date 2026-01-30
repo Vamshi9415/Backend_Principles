@@ -150,21 +150,22 @@ Not:
 
 ---
 
-## 🧪 Express Example
+## 🧪 FastAPI Example
 
-```js
-const express = require("express");
-const app = express();
+```python
+from fastapi import FastAPI
 
-app.get("/api/books", (req, res) => {
-  res.json(["Book 1", "Book 2"]);
-});
+app = FastAPI()
 
-app.post("/api/books", (req, res) => {
-  res.json({ message: "Book created" });
-});
+@app.get("/api/books")
+async def get_books():
+    return ["Book 1", "Book 2"]
 
-app.listen(3000);
+@app.post("/api/books")
+async def create_book():
+    return {"message": "Book created"}
+
+# Run with: uvicorn main:app --reload --port 3000
 ```
 
 ---
@@ -199,11 +200,14 @@ Here:
 
 ## 🧠 Server-side Matching
 
-```js
-app.get("/api/users/:id", (req, res) => {
-  const userId = req.params.id;
-  res.json({ userId });
-});
+```python
+from fastapi import FastAPI
+
+app = FastAPI()
+
+@app.get("/api/users/{id}")
+async def get_user(id: str):
+    return {"userId": id}
 ```
 
 ---
@@ -260,14 +264,17 @@ GET /api/search?query=some+value
 
 ---
 
-## 🧪 Express Example
+## 🧪 FastAPI Example
 
-```js
-app.get("/api/books", (req, res) => {
-  const page = req.query.page;
-  const limit = req.query.limit;
-  res.json({ page, limit });
-});
+```python
+from fastapi import FastAPI
+from typing import Optional
+
+app = FastAPI()
+
+@app.get("/api/books")
+async def get_books(page: Optional[int] = None, limit: Optional[int] = None):
+    return {"page": page, "limit": limit}
 ```
 
 ---
@@ -334,12 +341,16 @@ Example:
 
 ---
 
-## 🧪 Express Example
+## 🧪 FastAPI Example
 
-```js
-app.get("/api/users/:userId/posts/:postId", (req, res) => {
-  res.json(req.params);
-});
+```python
+from fastapi import FastAPI
+
+app = FastAPI()
+
+@app.get("/api/users/{userId}/posts/{postId}")
+async def get_user_post(userId: str, postId: str):
+    return {"userId": userId, "postId": postId}
 ```
 
 ---
@@ -373,16 +384,20 @@ Because:
 
 ---
 
-## 🧪 Express Example
+## 🧪 FastAPI Example
 
-```js
-app.get("/api/v1/products", (req, res) => {
-  res.json({ id: 1, name: "Phone", price: 100 });
-});
+```python
+from fastapi import FastAPI
 
-app.get("/api/v2/products", (req, res) => {
-  res.json({ id: 1, title: "Phone", price: 100 });
-});
+app = FastAPI()
+
+@app.get("/api/v1/products")
+async def get_products_v1():
+    return {"id": 1, "name": "Phone", "price": 100}
+
+@app.get("/api/v2/products")
+async def get_products_v2():
+    return {"id": 1, "title": "Phone", "price": 100}
 ```
 
 ---
@@ -403,12 +418,23 @@ From transcript:
 
 ---
 
-## 🧪 Express Example
+## 🧪 FastAPI Example
 
-```js
-app.use((req, res) => {
-  res.status(404).json({ message: "Route not found" });
-});
+```python
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+
+app = FastAPI()
+
+# Define all your routes first
+
+# Catch-all route (must be defined last)
+@app.api_route("/{full_path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
+async def catch_all(request: Request, full_path: str):
+    return JSONResponse(
+        status_code=404,
+        content={"message": "Route not found"}
+    )
 ```
 
 ---
@@ -434,56 +460,74 @@ From transcript:
 
 Order matters:
 
-```js
-app.get("/users/:id", ...)
-app.get("/users/profile", ...) // This might never be reached!
+```python
+@app.get("/users/{id}")
+async def get_user(id: str):
+    ...
+
+@app.get("/users/profile")  # This might never be reached!
+async def get_profile():
+    ...
+
+# Better: Define specific routes BEFORE dynamic ones
+@app.get("/users/profile")
+async def get_profile():
+    ...
+
+@app.get("/users/{id}")
+async def get_user(id: str):
+    ...
 ```
 
 ---
 
 # 12. Complete Example Backend
 
-```js
-const express = require("express");
-const app = express();
+```python
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+from typing import Optional
 
-app.use(express.json());
+app = FastAPI()
 
-// Static
-app.get("/api/books", (req, res) => {
-  res.json(["Book A", "Book B"]);
-});
+# Static
+@app.get("/api/books")
+async def get_books():
+    return ["Book A", "Book B"]
 
-// Dynamic
-app.get("/api/users/:id", (req, res) => {
-  res.json({ userId: req.params.id });
-});
+# Dynamic
+@app.get("/api/users/{id}")
+async def get_user(id: str):
+    return {"userId": id}
 
-// Query
-app.get("/api/search", (req, res) => {
-  res.json({ query: req.query.q });
-});
+# Query
+@app.get("/api/search")
+async def search(q: Optional[str] = None):
+    return {"query": q}
 
-// Nested
-app.get("/api/users/:userId/posts/:postId", (req, res) => {
-  res.json(req.params);
-});
+# Nested
+@app.get("/api/users/{userId}/posts/{postId}")
+async def get_user_post(userId: str, postId: str):
+    return {"userId": userId, "postId": postId}
 
-// Versioning
-app.get("/api/v1/products", (req, res) => {
-  res.json({ id: 1, name: "Phone" });
-});
+# Versioning
+@app.get("/api/v1/products")
+async def get_products_v1():
+    return {"id": 1, "name": "Phone"}
 
-app.get("/api/v2/products", (req, res) => {
-  res.json({ id: 1, title: "Phone" });
-});
+@app.get("/api/v2/products")
+async def get_products_v2():
+    return {"id": 1, "title": "Phone"}
 
-// Catch all
-app.use((req, res) => {
-  res.status(404).json({ message: "Not Found" });
-});
+# Catch all (must be last)
+@app.api_route("/{full_path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
+async def catch_all(request: Request, full_path: str):
+    return JSONResponse(
+        status_code=404,
+        content={"message": "Not Found"}
+    )
 
-app.listen(3000);
+# Run with: uvicorn main:app --reload --port 3000
 ```
 
 ---
